@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from django.db import models
 
 
@@ -11,6 +13,5 @@ class ProcessedWebhookEvent(models.Model):
         unique_together = [("provider", "event_id")]
         indexes = [models.Index(fields=["provider", "received_at"])]
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"WebhookEvent(provider={self.provider}, event_id={self.event_id})"
-

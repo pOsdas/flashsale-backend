@@ -1,23 +1,25 @@
-from django.db import models
-from django.conf import settings
+from __future__ import annotations
 
-from app.catalog.models import Product
+from django.conf import settings
+from django.db import models
+
+from apps.catalog.models import Product
 
 
 class Reservation(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
-    qty = models.IntegerField()
+    qty = models.PositiveIntegerField()
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         indexes = [
             models.Index(fields=["user", "created_at"]),
-            models.Index(fields=["product", "created_at"])
+            models.Index(fields=["product", "created_at"]),
         ]
 
-    def __str__(self):
-        return f"Reservation(user={self.user_id}. product={self.product}, qty={self.qty})"
+    def __str__(self) -> str:
+        return f"Reservation(user={self.user_id}, product={self.product_id}, qty={self.qty})"
 
 
 class Order(models.Model):
@@ -35,15 +37,15 @@ class Order(models.Model):
     class Meta:
         indexes = [
             models.Index(fields=["user", "created_at"]),
-            models.Index(fields=["status", "created_at"])
+            models.Index(fields=["status", "created_at"]),
         ]
 
-    def __str__(self):
-        return f"Order(id={self.id}, user={self.user_id}, status={self.status}"
+    def __str__(self) -> str:
+        return f"Order(id={self.id}, user={self.user_id}, status={self.status})"
 
 
 class OrderItem(models.Model):
-    order = models.ForeignKey(Order, on_delete=models.CASCADE)
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="items")
     product = models.ForeignKey(Product, on_delete=models.PROTECT)
     qty = models.PositiveIntegerField()
     price_cents = models.IntegerField()
@@ -51,11 +53,11 @@ class OrderItem(models.Model):
     class Meta:
         indexes = [
             models.Index(fields=["order"]),
-            models.Index(fields=["product"])
+            models.Index(fields=["product"]),
         ]
 
-    def __str__(self):
-        return f"OrderItem(order={self.order_id}, product={self.product}, qty={self.qty}"
+    def __str__(self) -> str:
+        return f"OrderItem(order={self.order_id}, product={self.product_id}, qty={self.qty})"
 
 
 class IdempotencyKey(models.Model):
@@ -66,7 +68,7 @@ class IdempotencyKey(models.Model):
     created_at = models.DateTimeField()
 
     class Meta:
-        unique_together = ("user", "key")
+        unique_together = [("user", "key")]
         indexes = [models.Index(fields=["user", "created_at"])]
 
     def __str__(self) -> str:
@@ -87,5 +89,3 @@ class OutboxEvent(models.Model):
 
     def __str__(self) -> str:
         return f"OutboxEvent(topic={self.topic}, id={self.id})"
-
-
