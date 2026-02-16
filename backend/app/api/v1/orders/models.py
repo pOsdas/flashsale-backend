@@ -3,7 +3,7 @@ from __future__ import annotations
 from django.conf import settings
 from django.db import models
 
-from apps.catalog.models import Product
+from app.api.v1.catalog.models import Product
 
 
 class Reservation(models.Model):
