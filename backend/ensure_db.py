@@ -1,14 +1,15 @@
+"""Make sure the models and schemas already exists"""
 import os
 import sys
 import time
-import django
+import psycopg
 import logging
+import argparse
 import subprocess
 import urllib.parse
-import psycopg
 from psycopg import sql
-from psycopg.errors import DuplicateDatabase, OperationalError
 from dotenv import load_dotenv
+from psycopg.errors import DuplicateDatabase, OperationalError
 import django
 
 logging.basicConfig(
@@ -20,6 +21,26 @@ logger = logging.getLogger(__name__)
 
 RETRY_COUNT = int(os.environ.get("DB_CREATE_RETRIES", 5))
 RETRY_DELAY = int(os.environ.get("DB_CREATE_RETRY_DELAY", 2))
+
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser()
+    p.add_argument(
+        "--env-file",
+        default=None,
+        help="Path to .env file (e.g. .env.local, .env.docker). If omitted, default Settings env_file will be used.",
+    )
+    return p.parse_args()
+
+
+args = parse_args()
+
+
+if args.env_file:
+    load_dotenv(args.env_file, override=False)
+    os.environ["ENV_FILE"] = args.env_file
+else:
+    pass
 
 
 def get_database_url():
