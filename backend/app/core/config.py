@@ -1,7 +1,8 @@
 """Pydantic settings here"""
+import os
 from functools import lru_cache
 from pydantic import AnyUrl, Field
-from typing import List
+from typing import List, Tuple
 from pydantic_settings import SettingsConfigDict, BaseSettings
 
 
@@ -19,9 +20,17 @@ class ApiPrefix(BaseSettings):
     v1: ApiV1Prefix = ApiV1Prefix()
 
 
+def _resolve_env_files() -> Tuple[str, ...]:
+    explicit = os.getenv("ENV_FILE")
+    if explicit:
+        return (explicit,)
+
+    return (".env.local-template", ".env.local")
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=(".env-template", ".env"),
+        env_file=_resolve_env_files(),
         case_sensitive=False,
         extra="ignore",
     )
