@@ -8,7 +8,7 @@ from app.api.v1.catalog.models import Product
 
 class Reservation(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    product = models.ForeignKey(Product, on_delete=models.CASCADE)
+    product = models.ForeignKey(Product, on_delete=models.CASCADE)  # null -> False -> Optional dont needed
     qty = models.PositiveIntegerField()
     created_at = models.DateTimeField(auto_now_add=True)
 
