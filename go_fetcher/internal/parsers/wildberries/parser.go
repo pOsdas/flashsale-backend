@@ -2,7 +2,6 @@ package wildberries
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -22,7 +21,7 @@ const (
 	catalogURL = "https://www.wildberries.ru/__internal/search/exactmatch/ru/common/v18/search"
 
 	defaultPageSize                = 100
-	defaultWBBrowserFetcherTimeout = 60 * time.Second
+	defaultWBBrowserFetcherTimeout = 35 * time.Second
 
 	wbRequestProfile        = "go_http_client_browser_headers"
 	wbBlockedRecommendation = "pause requests and refresh marketplace session cookies"
@@ -76,16 +75,8 @@ func (e *parserRequestError) ParserDetails() map[string]interface{} {
 		"request_host":    requestHostFromURL(e.requestURL),
 		"request_profile": wbRequestProfile,
 	}
-	var nestedDetailsProvider interface {
-		ParserDetails() map[string]interface{}
-	}
-	if errors.As(e.err, &nestedDetailsProvider) {
-		for key, value := range nestedDetailsProvider.ParserDetails() {
-			details[key] = value
-		}
-	}
 
-	if isRateLimitedOrBlockedError(e.err) && details["browser_fallback_error_type"] != "parser_response_invalid" && details["browser_fallback_error_type"] != "browser_fallback_timeout" {
+	if isRateLimitedOrBlockedError(e.err) {
 		details["error_type"] = "rate_limited_or_blocked"
 		details["recommendation"] = wbBlockedRecommendation
 	}
@@ -122,7 +113,7 @@ func NewParser(cfg ParserConfig, logger *slog.Logger) *Parser {
 		client: &http.Client{
 			Timeout: cfg.Timeout,
 		},
-		browserClient:  NewBrowserClient(cfg.BrowserFetcherEnabled, cfg.BrowserFetcherURL, cfg.BrowserFetcherTimeout, logger),
+		browserClient:  NewBrowserClient(cfg.BrowserFetcherEnabled, cfg.BrowserFetcherURL, cfg.BrowserFetcherTimeout),
 		logger:         logger,
 		cookie:         cfg.Cookie,
 		cookieProvider: cfg.CookieProvider,
@@ -146,10 +137,8 @@ func (p *Parser) ParseProduct(ctx context.Context, nmID string) ([]models.Produc
 		return nil, fmt.Errorf("parse WB product %s: %w", nmID, p.withRequestDetails(err, requestURL))
 	}
 
-	products, err := validateWBProductResponse(response, nmID)
-	if err != nil {
-		return nil, fmt.Errorf("validate WB product %s: %w", nmID, err)
-	}
+	products := normalizeWBProducts(response.productList())
+	products = deduplicateProductsBySKU(products)
 
 	p.logger.Info(
 		"wildberries product parsed",

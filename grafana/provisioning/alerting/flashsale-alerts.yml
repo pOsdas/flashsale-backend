@@ -44,10 +44,6 @@ groups:
             or absent(up{job="cadvisor"})
             or (up{job="blackbox_exporter"} == bool 0)
             or absent(up{job="blackbox_exporter"})
-            or (up{job="loki"} == bool 0)
-            or absent(up{job="loki"})
-            or (up{job="promtail"} == bool 0)
-            or absent(up{job="promtail"})
             or (up{job="grafana"} == bool 0)
             or absent(up{job="grafana"})
         refId: A
@@ -113,8 +109,6 @@ groups:
             or absent(probe_success{job="blackbox_http",instance="http://notification_consumer:8011/metrics"})
             or (probe_success{job="blackbox_http",instance="http://prometheus:9090/-/ready"} == bool 0)
             or absent(probe_success{job="blackbox_http",instance="http://prometheus:9090/-/ready"})
-            or (probe_success{job="blackbox_http",instance="http://loki:3100/ready"} == bool 0)
-            or absent(probe_success{job="blackbox_http",instance="http://loki:3100/ready"})
             or (probe_success{job="blackbox_http",instance="http://grafana:3000/api/health"} == bool 0)
             or absent(probe_success{job="blackbox_http",instance="http://grafana:3000/api/health"})
         refId: A

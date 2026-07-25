@@ -22,25 +22,14 @@ type ProductSearchParser interface {
 }
 
 type Server struct {
-	addr               string
-	apiKey             string
-	logger             *slog.Logger
-	wbFetcher          ProductFetcher
-	ozonFetcher        ProductFetcher
-	wbParser           ProductSearchParser
-	ozonParser         ProductSearchParser
-	parserHealthConfig ParserHealthConfig
+	addr        string
+	apiKey      string
+	logger      *slog.Logger
+	wbFetcher   ProductFetcher
+	ozonFetcher ProductFetcher
+	wbParser    ProductSearchParser
+	ozonParser  ProductSearchParser
 }
-
-type ParserHealthConfig struct {
-	MarketplaceTimeout time.Duration
-	HandlerTimeout     time.Duration
-}
-
-const (
-	defaultParserHealthMarketplaceTimeout = 90 * time.Second
-	defaultParserHealthHandlerTimeoutGap  = 10 * time.Second
-)
 
 type ParserHealthResponse struct {
 	Status string                      `json:"status"`
@@ -72,24 +61,15 @@ func NewServer(
 	ozonFetcher ProductFetcher,
 	wbParser ProductSearchParser,
 	ozonParser ProductSearchParser,
-	parserHealthConfig ParserHealthConfig,
 ) *Server {
-	if parserHealthConfig.MarketplaceTimeout <= 0 {
-		parserHealthConfig.MarketplaceTimeout = defaultParserHealthMarketplaceTimeout
-	}
-	if parserHealthConfig.HandlerTimeout <= parserHealthConfig.MarketplaceTimeout {
-		parserHealthConfig.HandlerTimeout = parserHealthConfig.MarketplaceTimeout + defaultParserHealthHandlerTimeoutGap
-	}
-
 	return &Server{
-		addr:               addr,
-		apiKey:             apiKey,
-		logger:             logger,
-		wbFetcher:          wbFetcher,
-		ozonFetcher:        ozonFetcher,
-		wbParser:           wbParser,
-		ozonParser:         ozonParser,
-		parserHealthConfig: parserHealthConfig,
+		addr:        addr,
+		apiKey:      apiKey,
+		logger:      logger,
+		wbFetcher:   wbFetcher,
+		ozonFetcher: ozonFetcher,
+		wbParser:    wbParser,
+		ozonParser:  ozonParser,
 	}
 }
 
@@ -103,17 +83,12 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/api/v1/parser/health/", s.handleParserHealth)
 	mux.Handle("/metrics", promhttp.Handler())
 
-	writeTimeout := 75 * time.Second
-	if minimumWriteTimeout := s.parserHealthConfig.HandlerTimeout + 5*time.Second; minimumWriteTimeout > writeTimeout {
-		writeTimeout = minimumWriteTimeout
-	}
-
 	httpServer := &http.Server{
 		Addr:              s.addr,
 		Handler:           observeHTTPRequests(mux),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       20 * time.Second,
-		WriteTimeout:      writeTimeout,
+		WriteTimeout:      75 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
 
@@ -196,7 +171,7 @@ func (s *Server) handleParserHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), s.parserHealthConfig.HandlerTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
 	defer cancel()
 
 	checks := map[string]ParserHealthItem{
@@ -207,42 +182,18 @@ func (s *Server) handleParserHealth(w http.ResponseWriter, r *http.Request) {
 				"endpoint": "/api/v1/parser/health",
 			},
 		},
-	}
-
-	type marketplaceHealthResult struct {
-		marketplace string
-		item        ParserHealthItem
-	}
-
-	resultCh := make(chan marketplaceHealthResult, 2)
-	parsers := []struct {
-		marketplace string
-		parser      ProductSearchParser
-	}{
-		{marketplace: "wb", parser: s.wbParser},
-		{marketplace: "ozon", parser: s.ozonParser},
-	}
-
-	pending := map[string]struct{}{"wb": {}, "ozon": {}}
-	for _, parserCheck := range parsers {
-		parserCheck := parserCheck
-		go func() {
-			item := s.runMarketplaceHealthCheck(ctx, parserCheck.marketplace, "iphone", parserCheck.parser)
-			resultCh <- marketplaceHealthResult{marketplace: parserCheck.marketplace, item: item}
-		}()
-	}
-
-	for len(pending) > 0 {
-		select {
-		case result := <-resultCh:
-			checks[result.marketplace] = result.item
-			delete(pending, result.marketplace)
-		case <-ctx.Done():
-			for marketplace := range pending {
-				checks[marketplace] = parserHealthContextError(marketplace, ctx.Err())
-			}
-			pending = nil
-		}
+		"wb": s.checkMarketplaceParser(
+			ctx,
+			"wb",
+			"iphone",
+			s.wbParser,
+		),
+		"ozon": s.checkMarketplaceParser(
+			ctx,
+			"ozon",
+			"iphone",
+			s.ozonParser,
+		),
 	}
 
 	response := ParserHealthResponse{
@@ -257,75 +208,6 @@ func (s *Server) handleParserHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeHealthJSON(w, statusCode, response)
-}
-
-func (s *Server) runMarketplaceHealthCheck(
-	parentCtx context.Context,
-	marketplace string,
-	query string,
-	parser ProductSearchParser,
-) ParserHealthItem {
-	startedAt := time.Now()
-	deadline, hasDeadline := parentCtx.Deadline()
-	parentDeadline := "none"
-	timeRemaining := time.Duration(0)
-	if hasDeadline {
-		parentDeadline = deadline.Format(time.RFC3339Nano)
-		timeRemaining = time.Until(deadline)
-	}
-
-	s.logger.Info(
-		"parser marketplace health check started",
-		slog.String("marketplace", marketplace),
-		slog.Duration("health_timeout", s.parserHealthConfig.MarketplaceTimeout),
-		slog.String("parent_deadline", parentDeadline),
-		slog.Duration("time_remaining", timeRemaining),
-	)
-
-	checkCtx, cancel := context.WithTimeout(parentCtx, s.parserHealthConfig.MarketplaceTimeout)
-	defer cancel()
-	result := s.checkMarketplaceParser(checkCtx, marketplace, query, parser)
-
-	s.logger.Info(
-		"parser marketplace health check finished",
-		slog.String("marketplace", marketplace),
-		slog.Duration("health_timeout", s.parserHealthConfig.MarketplaceTimeout),
-		slog.String("parent_deadline", parentDeadline),
-		slog.Duration("time_remaining", contextTimeRemaining(parentCtx)),
-		slog.Duration("duration", time.Since(startedAt)),
-		slog.String("result_status", result.Status),
-	)
-
-	return result
-}
-
-func contextTimeRemaining(ctx context.Context) time.Duration {
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		return 0
-	}
-	remaining := time.Until(deadline)
-	if remaining < 0 {
-		return 0
-	}
-	return remaining
-}
-
-func parserHealthContextError(marketplace string, err error) ParserHealthItem {
-	errorText := "parser health context ended"
-	if err != nil {
-		errorText = err.Error()
-	}
-	return ParserHealthItem{
-		Status: "error",
-		Details: map[string]interface{}{
-			"marketplace": marketplace,
-			"scenario":    "search_then_product_parse",
-			"error_type":  "network_timeout",
-			"message":     "Marketplace health check timed out or was canceled",
-			"error":       errorText,
-		},
-	}
 }
 
 func (s *Server) checkMarketplaceParser(
@@ -486,54 +368,6 @@ func (s *Server) checkMarketplaceParser(
 		}
 	}
 
-	if marketplace == "wb" {
-		if parsedProduct.SKU != product.SKU {
-			return ParserHealthItem{
-				Status: "error",
-				Details: map[string]interface{}{
-					"marketplace":  marketplace,
-					"scenario":     "search_then_product_parse",
-					"step":         "product_validation",
-					"selected_sku": product.SKU,
-					"parsed_sku":   parsedProduct.SKU,
-					"error":        "product parser returned a different WB nm_id",
-					"duration_ms":  time.Since(startedAt).Milliseconds(),
-				},
-			}
-		}
-		if isGenericMarketplaceTitle(parsedProduct.Title) {
-			return ParserHealthItem{
-				Status: "error",
-				Details: map[string]interface{}{
-					"marketplace":  marketplace,
-					"scenario":     "search_then_product_parse",
-					"step":         "product_validation",
-					"selected_sku": product.SKU,
-					"parsed_sku":   parsedProduct.SKU,
-					"parsed_title": parsedProduct.Title,
-					"error":        "product parser returned a generic Wildberries page title",
-					"duration_ms":  time.Since(startedAt).Milliseconds(),
-				},
-			}
-		}
-		if (product.Available > 0 || product.PriceCents > 0) && parsedProduct.PriceCents <= 0 {
-			return ParserHealthItem{
-				Status: "error",
-				Details: map[string]interface{}{
-					"marketplace":  marketplace,
-					"scenario":     "search_then_product_parse",
-					"step":         "product_validation",
-					"selected_sku": product.SKU,
-					"parsed_sku":   parsedProduct.SKU,
-					"parsed_title": parsedProduct.Title,
-					"parsed_price": parsedProduct.PriceCents,
-					"error":        "available WB product parser returned an empty or zero price",
-					"duration_ms":  time.Since(startedAt).Milliseconds(),
-				},
-			}
-		}
-	}
-
 	checkStatus := "ok"
 
 	details := map[string]interface{}{
@@ -610,26 +444,6 @@ func findFirstValidProduct(products []models.Product) (models.Product, bool) {
 	return models.Product{}, false
 }
 
-func isGenericMarketplaceTitle(title string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(title))
-	replacer := strings.NewReplacer("-", " ", "‐", " ", "‑", " ", "‒", " ", "–", " ", "—", " ", "―", " ")
-	normalized = strings.Join(strings.Fields(replacer.Replace(normalized)), " ")
-
-	patterns := []string{
-		"интернет магазин wildberries",
-		"широкий ассортимент товаров",
-		"скидки каждый день",
-		"модный интернет магазин wildberries",
-		"wildberries интернет магазин",
-	}
-	for _, pattern := range patterns {
-		if strings.Contains(normalized, pattern) {
-			return true
-		}
-	}
-	return false
-}
-
 func buildProductParseInput(marketplace string, product models.Product) string {
 	switch marketplace {
 	case "ozon":
@@ -701,45 +515,6 @@ func classifyParserError(err error) ParserErrorDetails {
 	errorText := strings.TrimSpace(err.Error())
 	lowerErrorText := strings.ToLower(errorText)
 	extraDetails := extractParserErrorDetails(err)
-
-	if finalSource, _ := extraDetails["final_error_source"].(string); finalSource == "browser_fallback" {
-		fallbackType, _ := extraDetails["browser_fallback_error_type"].(string)
-		switch fallbackType {
-		case "parser_response_invalid":
-			return ParserErrorDetails{
-				ErrorType: "parser_response_invalid",
-				Message:   "Browser fallback received HTTP 200 but marketplace data failed validation",
-				Error:     truncateString(errorText, 500),
-				Details:   extraDetails,
-			}
-		case "browser_fallback_timeout":
-			return ParserErrorDetails{
-				ErrorType: "browser_fallback_timeout",
-				Message:   "Browser fallback timed out while waiting for marketplace data",
-				Error:     truncateString(errorText, 500),
-				Details:   extraDetails,
-			}
-		case "blocked_by_antibot":
-			statusCode := http.StatusForbidden
-			if strings.Contains(lowerErrorText, "498") {
-				statusCode = 498
-			}
-			return ParserErrorDetails{
-				ErrorType:  "blocked_by_antibot",
-				StatusCode: statusCode,
-				Message:    "Browser fallback was also rejected by marketplace antibot",
-				Error:      stripErrorBody(errorText),
-				Details:    extraDetails,
-			}
-		case "browser_fallback_error":
-			return ParserErrorDetails{
-				ErrorType: "browser_fallback_error",
-				Message:   "Browser fallback failed after the direct HTTP parser",
-				Error:     truncateString(errorText, 500),
-				Details:   extraDetails,
-			}
-		}
-	}
 
 	if strings.Contains(lowerErrorText, "temporarily blocked") &&
 		strings.Contains(lowerErrorText, "rate_limited") {

@@ -7,14 +7,6 @@ modules:
       preferred_ip_protocol: ip4
       follow_redirects: true
 
-  parser_health:
-    prober: http
-    timeout: 50s
-    http:
-      method: GET
-      preferred_ip_protocol: ip4
-      follow_redirects: true
-
   tcp_connect:
     prober: tcp
     timeout: 5s

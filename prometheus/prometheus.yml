@@ -4,174 +4,137 @@ global:
   evaluation_interval: 15s
 
 scrape_configs:
-  - job_name: prometheus
-    static_configs:
-      - targets:
-          - prometheus:9090
+- job_name: prometheus
+  static_configs:
+  - targets:
+    - prometheus:9090
 
-  - job_name: backend
-    metrics_path: /api/v1/prometheus/metrics
-    static_configs:
-      - targets:
-          - backend:8000
+- job_name: backend
+  metrics_path: /api/v1/prometheus/metrics
+  static_configs:
+  - targets:
+    - backend:8000
 
-  - job_name: outbox_worker
-    static_configs:
-      - targets:
-          - outbox_worker:9100
+- job_name: outbox_worker
+  static_configs:
+  - targets:
+    - outbox_worker:9100
 
-  - job_name: monitoring_scanner
-    static_configs:
-      - targets:
-          - monitoring_scanner:8012
+- job_name: monitoring_scanner
+  static_configs:
+  - targets:
+    - monitoring_scanner:8012
 
-  - job_name: notification_consumer
-    static_configs:
-      - targets:
-          - notification_consumer:8011
+- job_name: notification_consumer
+  static_configs:
+  - targets:
+    - notification_consumer:8011
 
-  - job_name: telegram_bot
-    static_configs:
-      - targets:
-          - telegram_bot:8013
+- job_name: telegram_bot
+  static_configs:
+  - targets:
+    - telegram_bot:8013
 
-  - job_name: go_fetcher
-    metrics_path: /metrics
-    static_configs:
-      - targets:
-          - go_fetcher:8090
+- job_name: go_fetcher
+  metrics_path: /metrics
+  static_configs:
+  - targets:
+    - go_fetcher:8090
 
-  - job_name: ozon_browser_fetcher
-    metrics_path: /metrics
-    static_configs:
-      - targets:
-          - ozon_browser_fetcher:8095
+- job_name: ozon_browser_fetcher
+  metrics_path: /metrics
+  static_configs:
+  - targets:
+    - ozon_browser_fetcher:8095
 
-  - job_name: postgres
-    static_configs:
-      - targets:
-          - postgres_exporter:9187
+- job_name: vpn_controller
+  metrics_path: /metrics
+  static_configs:
+  - targets:
+    - vpn_controller:8097
 
-  - job_name: redis
-    static_configs:
-      - targets:
-          - redis_exporter:9121
+- job_name: postgres
+  static_configs:
+  - targets:
+    - postgres_exporter:9187
 
-  - job_name: rabbitmq
-    static_configs:
-      - targets:
-          - rabbitmq:15692
+- job_name: redis
+  static_configs:
+  - targets:
+    - redis_exporter:9121
 
-  - job_name: rabbitmq_detailed
-    metrics_path: /metrics/detailed
-    params:
-      family:
-        - queue_consumer_count
-        - queue_coarse_metrics
-    static_configs:
-      - targets:
-          - rabbitmq:15692
+- job_name: rabbitmq
+  static_configs:
+  - targets:
+    - rabbitmq:15692
 
-  - job_name: cadvisor
-    static_configs:
-      - targets:
-          - cadvisor:8080
+- job_name: rabbitmq_detailed
+  metrics_path: /metrics/detailed
+  params:
+    family:
+    - queue_consumer_count
+    - queue_coarse_metrics
+  static_configs:
+  - targets:
+    - rabbitmq:15692
 
-  - job_name: blackbox_exporter
-    static_configs:
-      - targets:
-          - blackbox_exporter:9115
+- job_name: cadvisor
+  static_configs:
+  - targets:
+    - cadvisor:8080
 
-  - job_name: loki
-    static_configs:
-      - targets:
-          - loki:3100
+- job_name: blackbox_exporter
+  static_configs:
+  - targets:
+    - blackbox_exporter:9115
 
-  - job_name: promtail
-    static_configs:
-      - targets:
-          - promtail:9080
+- job_name: grafana
+  static_configs:
+  - targets:
+    - grafana:3000
 
-  - job_name: grafana
-    static_configs:
-      - targets:
-          - grafana:3000
+- job_name: blackbox_http
+  metrics_path: /probe
+  params:
+    module:
+    - http_2xx
+  static_configs:
+  - targets:
+      - http://backend:8000/api/v1/prometheus/metrics
+      - http://go_fetcher:8090/health
+      - http://ozon_browser_fetcher:8095/api/v1/health
+      - http://wb_browser_fetcher:8096/api/v1/health
+      - http://vpn_controller:8097/api/v1/health
+      - http://outbox_worker:9100/metrics
+      - http://notification_consumer:8011/metrics
+      - http://prometheus:9090/-/ready
+      - http://grafana:3000/api/health
+  relabel_configs:
+  - source_labels:
+    - __address__
+    target_label: __param_target
+  - source_labels:
+    - __param_target
+    target_label: instance
+  - target_label: __address__
+    replacement: blackbox_exporter:9115
 
-  # Лёгкие HTTP-проверки.
-  # Не выполняют реальный поиск или парсинг товаров.
-  - job_name: blackbox_http
-    scrape_interval: 30s
-    scrape_timeout: 10s
-    metrics_path: /probe
-    params:
-      module:
-        - http_2xx
-    static_configs:
-      - targets:
-          - http://backend:8000/api/v1/prometheus/metrics
-          - http://go_fetcher:8090/health
-          - http://ozon_browser_fetcher:8095/api/v1/health
-          - http://outbox_worker:9100/metrics
-          - http://notification_consumer:8011/metrics
-          - http://prometheus:9090/-/ready
-          - http://loki:3100/ready
-          - http://grafana:3000/api/health
-    relabel_configs:
-      - source_labels:
-          - __address__
-        target_label: __param_target
-
-      - source_labels:
-          - __param_target
-        target_label: instance
-
-      - target_label: __address__
-        replacement: blackbox_exporter:9115
-
-  # Реальный synthetic check парсеров WB и Ozon.
-  # Выполняет поиск "iphone" и парсинг найденного товара.
-  - job_name: marketplace_parser_synthetic
-    scrape_interval: 30m
-    scrape_timeout: 55s
-    metrics_path: /probe
-    params:
-      module:
-        - parser_health
-    static_configs:
-      - targets:
-          - http://go_fetcher:8090/api/v1/parser/health
-    relabel_configs:
-      - source_labels:
-          - __address__
-        target_label: __param_target
-
-      - source_labels:
-          - __param_target
-        target_label: instance
-
-      - target_label: __address__
-        replacement: blackbox_exporter:9115
-
-  - job_name: blackbox_tcp
-    scrape_interval: 30s
-    scrape_timeout: 10s
-    metrics_path: /probe
-    params:
-      module:
-        - tcp_connect
-    static_configs:
-      - targets:
-          - postgres:5432
-          - redis:6379
-          - rabbitmq:5672
-    relabel_configs:
-      - source_labels:
-          - __address__
-        target_label: __param_target
-
-      - source_labels:
-          - __param_target
-        target_label: instance
-
-      - target_label: __address__
-        replacement: blackbox_exporter:9115
+- job_name: blackbox_tcp
+  metrics_path: /probe
+  params:
+    module:
+    - tcp_connect
+  static_configs:
+  - targets:
+    - postgres:5432
+    - redis:6379
+    - rabbitmq:5672
+  relabel_configs:
+  - source_labels:
+    - __address__
+    target_label: __param_target
+  - source_labels:
+    - __param_target
+    target_label: instance
+  - target_label: __address__
+    replacement: blackbox_exporter:9115

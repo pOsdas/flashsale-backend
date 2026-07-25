@@ -13,9 +13,6 @@ type Config struct {
 
 	Timeout time.Duration
 
-	ParserHealthMarketplaceTimeoutSeconds int
-	ParserHealthHandlerTimeoutSeconds     int
-
 	WBRequestDelay                 time.Duration
 	WBMaxRetries                   int
 	WBRetryBaseDelay               time.Duration
@@ -40,15 +37,12 @@ func Load() (*Config, error) {
 
 		Timeout: 30 * time.Second,
 
-		ParserHealthMarketplaceTimeoutSeconds: getEnvInt("PARSER_HEALTH_MARKETPLACE_TIMEOUT_SECONDS", 90),
-		ParserHealthHandlerTimeoutSeconds:     getEnvInt("PARSER_HEALTH_HANDLER_TIMEOUT_SECONDS", 100),
-
 		WBRequestDelay:                 getEnvDurationMS("WB_REQUEST_DELAY_MS", 700*time.Millisecond),
 		WBMaxRetries:                   getEnvInt("WB_MAX_RETRIES", 3),
 		WBRetryBaseDelay:               getEnvDurationMS("WB_RETRY_BASE_DELAY_MS", 1*time.Second),
 		WBBrowserFetcherURL:            os.Getenv("WB_BROWSER_FETCHER_URL"),
 		WBBrowserFetcherEnabled:        getEnvBool("WB_BROWSER_FETCHER_ENABLED", false),
-		WBBrowserFetcherTimeoutSeconds: getEnvInt("WB_BROWSER_FETCHER_TIMEOUT_SECONDS", 60),
+		WBBrowserFetcherTimeoutSeconds: getEnvInt("WB_BROWSER_FETCHER_TIMEOUT_SECONDS", 35),
 
 		OzonRequestDelay:             getEnvDurationMS("OZON_REQUEST_DELAY_MS", 700*time.Millisecond),
 		OzonMaxRetries:               getEnvInt("OZON_MAX_RETRIES", 3),
@@ -57,7 +51,7 @@ func Load() (*Config, error) {
 
 		OzonBrowserFetcherURL:            os.Getenv("OZON_BROWSER_FETCHER_URL"),
 		OzonBrowserFetcherEnabled:        getEnvBool("OZON_BROWSER_FETCHER_ENABLED", false),
-		OzonBrowserFetcherTimeoutSeconds: getEnvInt("OZON_BROWSER_FETCHER_TIMEOUT_SECONDS", 75),
+		OzonBrowserFetcherTimeoutSeconds: getEnvInt("OZON_BROWSER_FETCHER_TIMEOUT_SECONDS", 35),
 	}
 
 	if cfg.DjangoURL == "" {
@@ -70,14 +64,6 @@ func Load() (*Config, error) {
 
 	if cfg.WBMaxRetries < 0 {
 		return nil, fmt.Errorf("WB_MAX_RETRIES must be greater than or equal to zero")
-	}
-
-	if cfg.ParserHealthMarketplaceTimeoutSeconds <= 0 {
-		return nil, fmt.Errorf("PARSER_HEALTH_MARKETPLACE_TIMEOUT_SECONDS must be greater than zero")
-	}
-
-	if cfg.ParserHealthHandlerTimeoutSeconds <= cfg.ParserHealthMarketplaceTimeoutSeconds {
-		return nil, fmt.Errorf("PARSER_HEALTH_HANDLER_TIMEOUT_SECONDS must be greater than PARSER_HEALTH_MARKETPLACE_TIMEOUT_SECONDS")
 	}
 
 	if cfg.WBBrowserFetcherTimeoutSeconds <= 0 {

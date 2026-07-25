@@ -36,46 +36,16 @@ browser.start()
 atexit.register(browser.stop)
 
 
-def classify_fetch_error(error: BaseException | str) -> str:
-    error_text = str(error or "").lower()
-    if (
-        "status is 403" in error_text
-        or "status is 498" in error_text
-        or "antibot" in error_text
-        or "angie" in error_text
-    ):
-        return "blocked_by_antibot"
-    if (
-        "validation" in error_text
-        or "invalid" in error_text
-        or "not wildberries json" in error_text
-        or "does not contain" in error_text
-        or "product catalog" in error_text
-    ):
-        return "parser_response_invalid"
-    if "timeout" in error_text or "deadline exceeded" in error_text:
-        return "browser_fallback_timeout"
-    return "browser_fallback_error"
-
-
 @app.post("/api/v1/fetch")
 def fetch():
     data = request.get_json(silent=True) or {}
     url = str(data.get("url") or "").strip()
-    try:
-        request_timeout_ms = int(data.get("request_timeout_ms") or 0)
-    except (TypeError, ValueError):
-        return jsonify({"error": "request_timeout_ms must be an integer"}), 400
     if not is_allowed_url(url):
         return jsonify({"error": "url must be an allowed Wildberries HTTPS URL"}), 400
 
     try:
-        print(
-            "WB browser fetch requested: "
-            f"url={url}, request_timeout_ms={request_timeout_ms}",
-            flush=True,
-        )
-        result = browser.fetch(url, request_timeout_ms)
+        print(f"WB browser fetch requested: url={url}", flush=True)
+        result = browser.fetch(url)
         body_text = str(result.get("body") or "")
         try:
             body = json.loads(body_text)
@@ -86,33 +56,17 @@ def fetch():
             {
                 "status_code": int(result.get("status_code") or 0),
                 "body": body,
-                "requested_url": str(result.get("requested_url") or url),
-                "final_url": str(result.get("final_url") or ""),
-                "content_type": str(result.get("content_type") or ""),
-                "response_size": int(result.get("response_size") or 0),
-                "document_title": str(result.get("document_title") or ""),
-                "response_kind": str(result.get("response_kind") or ""),
-                "requested_nm_id": str(result.get("requested_nm_id") or ""),
-                "parsed_nm_id": str(result.get("parsed_nm_id") or ""),
-                "json_decode_success": bool(result.get("json_decode_success")),
-                "resultset": str(result.get("resultset") or ""),
-                "products_count": int(result.get("products_count") or 0),
             }
         )
     except Exception as exc:
-        error_type = classify_fetch_error(exc)
-        print(
-            f"WB browser fetch failed: error_type={error_type}, error={exc}",
-            flush=True,
-        )
-        return jsonify({"error": str(exc), "error_type": error_type}), 500
+        print(f"WB browser fetch failed: error={exc}", flush=True)
+        return jsonify({"error": str(exc)}), 500
 
 
 @app.get("/api/v1/health")
 def health():
-    health_data = browser.get_health_snapshot()
-    status_code = 200 if health_data["status"] == "ok" else 503
-    return jsonify(health_data), status_code
+    ready = browser.is_ready()
+    return jsonify({"status": "ok" if ready else "error"}), 200 if ready else 503
 
 
 if __name__ == "__main__":

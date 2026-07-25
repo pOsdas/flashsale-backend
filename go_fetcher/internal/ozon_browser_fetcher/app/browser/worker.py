@@ -394,7 +394,6 @@ class BrowserWorker:
             "browser_ready": browser_ready,
             "queue_size": self.task_queue.qsize(),
             "startup_error": self.startup_error is not None,
-            **self.manager.get_connection_snapshot(),
         }
 
     def stop(self) -> None:

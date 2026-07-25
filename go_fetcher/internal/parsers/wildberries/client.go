@@ -3,7 +3,6 @@ package wildberries
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -26,33 +25,6 @@ const (
 type wbTemporaryBlockedError struct {
 	Reason       string
 	BlockedUntil time.Time
-}
-
-type wbHTTPAndBrowserFallbackError struct {
-	HTTPParserError      error
-	BrowserFallbackError error
-	BrowserFallbackKind  string
-}
-
-func (e *wbHTTPAndBrowserFallbackError) Error() string {
-	return fmt.Sprintf(
-		"WB HTTP parser failed: %v; browser fallback failed: %v",
-		e.HTTPParserError,
-		e.BrowserFallbackError,
-	)
-}
-
-func (e *wbHTTPAndBrowserFallbackError) Unwrap() []error {
-	return []error{e.HTTPParserError, e.BrowserFallbackError}
-}
-
-func (e *wbHTTPAndBrowserFallbackError) ParserDetails() map[string]interface{} {
-	return map[string]interface{}{
-		"http_parser_error":           e.HTTPParserError.Error(),
-		"browser_fallback_error":      e.BrowserFallbackError.Error(),
-		"browser_fallback_error_type": e.BrowserFallbackKind,
-		"final_error_source":          "browser_fallback",
-	}
 }
 
 func (e *wbTemporaryBlockedError) Error() string {
@@ -126,20 +98,13 @@ func (p *Parser) doJSONRequest(ctx context.Context, requestURL string, target an
 					p.logger.Info("wildberries browser fallback succeeded", slog.String("url", requestURL))
 					return nil
 				} else {
-					fallbackKind := wbBrowserFallbackErrorKind(browserErr)
 					p.logger.Error(
 						"wildberries browser fallback failed",
 						slog.String("url", requestURL),
 						slog.String("error", browserErr.Error()),
 					)
-					if fallbackKind == "blocked_by_antibot" {
-						p.blockTemporarily("blocked_by_antibot", 15*time.Minute)
-					}
-					return &wbHTTPAndBrowserFallbackError{
-						HTTPParserError:      err,
-						BrowserFallbackError: browserErr,
-						BrowserFallbackKind:  fallbackKind,
-					}
+					p.blockTemporarily("blocked_by_antibot", 15*time.Minute)
+					return fmt.Errorf("WB HTTP request blocked: %w; browser fallback failed: %v", err, browserErr)
 				}
 			}
 
@@ -153,14 +118,6 @@ func (p *Parser) doJSONRequest(ctx context.Context, requestURL string, target an
 	}
 
 	return fmt.Errorf("request failed after %d retries: %w", p.maxRetries, lastErr)
-}
-
-func wbBrowserFallbackErrorKind(err error) string {
-	var fallbackErr *wbBrowserFallbackError
-	if errors.As(err, &fallbackErr) && strings.TrimSpace(fallbackErr.Kind) != "" {
-		return fallbackErr.Kind
-	}
-	return classifyWBBrowserFallbackError(err)
 }
 
 func (p *Parser) doJSONRequestOnce(ctx context.Context, requestURL string, target any) error {

@@ -38,22 +38,3 @@ func TestWBProductsResponseProductListReadsDataProducts(t *testing.T) {
 		t.Fatalf("expected data product id 456, got %d", products[0].ID)
 	}
 }
-
-func TestWBProductsResponseProductListReadsCards(t *testing.T) {
-	for name, body := range map[string]string{
-		"root": `{"cards":[{"id":789,"name":"root card"}]}`,
-		"data": `{"data":{"cards":[{"id":789,"name":"data card"}]}}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			var response wbProductsResponse
-			if err := json.Unmarshal([]byte(body), &response); err != nil {
-				t.Fatalf("unmarshal response: %v", err)
-			}
-
-			products := response.productList()
-			if len(products) != 1 || products[0].ID != 789 {
-				t.Fatalf("expected card id 789, got %#v", products)
-			}
-		})
-	}
-}

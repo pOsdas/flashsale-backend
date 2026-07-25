@@ -28,3 +28,6 @@
 /backend/compare_ozon_fingerprints.py
 /backend/ozon_browser_probe.py
 /backend/ozon_fingerprint_probe.py
+/tmp/
+/backend/.env.prod
+/go_fetcher/internal/vpn_controller/vpn_profiles.json
