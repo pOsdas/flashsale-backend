@@ -66,3 +66,44 @@ VPN_PREFLIGHT_LAST_SUCCESS_TIMESTAMP_SECONDS = Gauge(
     "vpn_preflight_last_success_timestamp_seconds",
     "Unix timestamp of the latest preflight with at least one profile",
 )
+
+VPN_PARSE_REQUESTS_TOTAL = Counter(
+    "vpn_parse_requests_total",
+    "Total marketplace parse requests handled by the VPN gateway",
+    ["marketplace", "result"],
+)
+
+VPN_PARSE_REQUEST_DURATION_SECONDS = Histogram(
+    "vpn_parse_request_duration_seconds",
+    "VPN gateway parse request duration in seconds",
+    ["marketplace", "result"],
+)
+
+VPN_PARSE_ATTEMPTS_TOTAL = Counter(
+    "vpn_parse_attempts_total",
+    "Total marketplace parse attempts through VPN profiles",
+    ["marketplace", "exit_ip", "profile", "result"],
+)
+
+VPN_GROUP_PARSE_EXHAUSTED_TOTAL = Counter(
+    "vpn_group_parse_exhausted_total",
+    "Total exhausted VPN IP groups during marketplace parsing",
+    ["marketplace", "exit_ip", "reason"],
+)
+
+VPN_GROUP_SUSPECTED_REJECTION = Gauge(
+    "vpn_group_suspected_rejection",
+    "Whether the latest cycle has a suspected marketplace rejection for an IP group",
+    ["marketplace", "exit_ip"],
+)
+
+VPN_ACTIVE_SESSION = Gauge(
+    "vpn_active_session",
+    "Whether a VPN profile is currently active for marketplace parsing",
+    ["exit_ip", "profile"],
+)
+
+VPN_ACTIVE_SESSION_LAST_USED_TIMESTAMP_SECONDS = Gauge(
+    "vpn_active_session_last_used_timestamp_seconds",
+    "Unix timestamp when the active VPN parsing session was last used",
+)

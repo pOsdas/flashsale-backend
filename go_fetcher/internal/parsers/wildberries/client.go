@@ -36,6 +36,16 @@ func (e *wbTemporaryBlockedError) Error() string {
 }
 
 func (p *Parser) doJSONRequest(ctx context.Context, requestURL string, target any) error {
+	if p.browserFetcherRequired {
+		if p.browserClient == nil || !p.browserClient.Enabled() {
+			return fmt.Errorf("WB browser fetcher is required but not configured")
+		}
+		if err := p.browserClient.FetchJSON(ctx, requestURL, target); err != nil {
+			return fmt.Errorf("WB required browser fetch failed: %w", err)
+		}
+		return nil
+	}
+
 	if blocked, until, reason := p.isTemporarilyBlocked(); blocked {
 		return &wbTemporaryBlockedError{
 			Reason:       reason,
@@ -104,7 +114,7 @@ func (p *Parser) doJSONRequest(ctx context.Context, requestURL string, target an
 						slog.String("error", browserErr.Error()),
 					)
 					p.blockTemporarily("blocked_by_antibot", 15*time.Minute)
-					return fmt.Errorf("WB HTTP request blocked: %w; browser fallback failed: %v", err, browserErr)
+					return fmt.Errorf("WB HTTP request blocked: %w; browser fallback failed: %w", err, browserErr)
 				}
 			}
 

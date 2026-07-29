@@ -4,6 +4,8 @@ from urllib.parse import unquote, urlparse
 
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
 
+from ozon_browser_fetcher.app.browser.challenge import wait_for_ozon_page_ready
+from ozon_browser_fetcher.app.browser.errors import OzonAntibotRejectedError
 from ozon_browser_fetcher.app.models.product import Product
 from ozon_browser_fetcher.app.parsers.product_parser import (
     clean_title,
@@ -481,16 +483,20 @@ def wait_listing_loaded(page: Page, url: str) -> None:
     page.goto(
         url,
         wait_until="domcontentloaded",
-        timeout=30_000,
+        timeout=45_000,
     )
 
+    wait_for_ozon_page_ready(page)
+
     if is_antibot_url(page.url):
-        raise RuntimeError(f"ozon blocked by antibot page: current_url={page.url}")
+        raise OzonAntibotRejectedError(
+            f"Ozon returned antibot page: current_url={page.url!r}"
+        )
 
     try:
         page.wait_for_selector(
             'a[href*="/product/"]',
-            timeout=8_000,
+            timeout=12_000,
         )
     except PlaywrightTimeoutError:
         pass

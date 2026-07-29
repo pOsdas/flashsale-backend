@@ -32,6 +32,7 @@ from app.api.v1.monitoring.models import (
 from app.api.v1.monitoring.services.fetcher_client import (
     FetchedProductData,
     MonitoringFetcherClient,
+    MonitoringFetcherTemporarilyUnavailableError,
     build_monitoring_fetcher_client,
 )
 from app.core.logging import get_logger
@@ -40,7 +41,7 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 MIN_PRODUCT_CACHE_MINUTES = 60
-PRODUCT_CACHE_LOCK_TTL_SECONDS = 120
+PRODUCT_CACHE_LOCK_TTL_SECONDS = 480
 PRODUCT_CACHE_WAIT_SECONDS = 5.0
 PRODUCT_CACHE_WAIT_INTERVAL_SECONDS = 0.5
 
@@ -575,6 +576,15 @@ class ProductCacheService:
                 expires_at=expires_at,
                 effective_cache_minutes=effective_cache_minutes,
             )
+
+        except MonitoringFetcherTemporarilyUnavailableError:
+            refresh_result = "temporarily_unavailable"
+            self._record_request_result(
+                marketplace_label=marketplace_label,
+                operation="get_or_refresh",
+                result="temporarily_unavailable",
+            )
+            raise
 
         except Exception as exc:
             self._mark_cache_refresh_failed(

@@ -1,0 +1,2 @@
+class OzonAntibotRejectedError(RuntimeError):
+    pass

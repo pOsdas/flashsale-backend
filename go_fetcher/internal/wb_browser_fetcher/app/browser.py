@@ -1,13 +1,16 @@
+import json
+import os
+import re
 import threading
 import time
-import re
-import json
 from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Optional
 from urllib.parse import parse_qs, quote_plus, urlparse
 
-from playwright.sync_api import Browser, BrowserContext, Page, Playwright, sync_playwright
+from playwright.sync_api import BrowserContext, Page
+
+from browser_runtime.chrome_cdp import ChromeCDPConfiguration, ChromeCDPSession
 
 
 def parse_cookie_header(cookie_header: str) -> List[Dict]:
@@ -39,40 +42,84 @@ def parse_cookie_header(cookie_header: str) -> List[Dict]:
 class WBBrowser:
     def __init__(self, cookie_path: str) -> None:
         self.cookie_path = Path(cookie_path)
-        self.playwright: Playwright | None = None
-        self.browser: Browser | None = None
+        self.runtime = ChromeCDPSession(
+            ChromeCDPConfiguration.from_environment("wb")
+        )
         self.context: BrowserContext | None = None
         self.page: Page | None = None
         self.cookie_mtime_ns = -1
         self.lock = threading.Lock()
+        self.proxy_url = ""
+        self.session_id = ""
+        self.profile_id = ""
+        self.request_timeout_ms = self._env_int(
+            "WB_BROWSER_REQUEST_TIMEOUT_MS",
+            60_000,
+        )
 
-    def start(self) -> None:
-        self.playwright = sync_playwright().start()
-        self.browser = self.playwright.chromium.launch(headless=True)
-        self.context = self.browser.new_context(
-            viewport={"width": 1400, "height": 900},
-            locale="ru-RU",
-            timezone_id="Europe/Moscow",
-        )
-        self._reload_cookies(force=True)
-        self.page = self.context.new_page()
-        self.page.set_default_timeout(30_000)
-        self.page.set_default_navigation_timeout(30_000)
-        response = self.page.goto(
-            "https://www.wildberries.ru/",
-            wait_until="domcontentloaded",
-        )
-        print(
-            "WB browser started: "
-            f"homepage_status={response.status if response else 0}, "
-            f"url={self.page.url}, "
-            f"cookies={self._cookie_names()}",
-            flush=True,
-        )
+    def start(
+        self,
+        proxy_url: str = "",
+        session_id: str = "",
+        profile_id: str = "",
+    ) -> None:
+        self.proxy_url = proxy_url.strip()
+        self.session_id = session_id.strip()
+        self.profile_id = profile_id.strip()
+
+        try:
+            self.context = self.runtime.start(
+                proxy_url=self.proxy_url,
+                session_id=self.session_id,
+                profile_id=self.profile_id,
+            )
+            self._reload_cookies(force=True)
+
+            existing_pages = self.context.pages
+            self.page = (
+                existing_pages[0]
+                if existing_pages
+                else self.context.new_page()
+            )
+            self.page.set_default_timeout(self.request_timeout_ms)
+            self.page.set_default_navigation_timeout(self.request_timeout_ms)
+
+            response = self.page.goto(
+                "https://www.wildberries.ru/",
+                wait_until="domcontentloaded",
+            )
+            print(
+                "WB Google Chrome connected over CDP: "
+                f"cdp_url={self.runtime.config.cdp_url}, "
+                f"proxy_enabled={bool(self.proxy_url)}, "
+                f"session={self.session_id or 'direct'}, "
+                f"profile_id={self.profile_id or self.session_id or 'direct'}, "
+                f"profile_dir={self.runtime.profile_dir}, "
+                f"homepage_status={response.status if response else 0}, "
+                f"url={self.page.url}, "
+                f"cookies={self._cookie_names()}",
+                flush=True,
+            )
+        except Exception:
+            self._stop_locked()
+            raise
+
+    def configuration_ready(self) -> bool:
+        if not self._env_bool("WB_BROWSER_IMPORT_COOKIE_FILE", True):
+            return True
+        try:
+            cookie_header = self.cookie_path.read_text(
+                encoding="utf-8"
+            ).strip()
+        except OSError:
+            return False
+        return bool(parse_cookie_header(cookie_header))
 
     def _reload_cookies(self, force: bool = False) -> None:
         if self.context is None:
             raise RuntimeError("browser context is not started")
+        if not self._env_bool("WB_BROWSER_IMPORT_COOKIE_FILE", True):
+            return
 
         stat = self.cookie_path.stat()
         if not force and stat.st_mtime_ns == self.cookie_mtime_ns:
@@ -443,8 +490,19 @@ class WBBrowser:
             flush=True,
         )
 
-    def fetch(self, url: str) -> Dict:
+    def fetch(
+        self,
+        url: str,
+        proxy_url: str = "",
+        vpn_session_id: str = "",
+        browser_profile_id: str = "",
+    ) -> Dict:
         with self.lock:
+            self._ensure_session_locked(
+                proxy_url=proxy_url,
+                session_id=vpn_session_id,
+                profile_id=browser_profile_id,
+            )
             if self.page is None or self.context is None:
                 raise RuntimeError("WB browser is not ready")
 
@@ -473,13 +531,69 @@ class WBBrowser:
 
             return result
 
+    def _ensure_session_locked(
+        self,
+        *,
+        proxy_url: str,
+        session_id: str,
+        profile_id: str,
+    ) -> None:
+        normalized_proxy = proxy_url.strip()
+        normalized_session = session_id.strip()
+        normalized_profile = profile_id.strip()
+        if (
+            self.is_ready()
+            and self.proxy_url == normalized_proxy
+            and self.session_id == normalized_session
+            and self.profile_id == normalized_profile
+        ):
+            return
+        self._stop_locked()
+        self.start(
+            proxy_url=normalized_proxy,
+            session_id=normalized_session,
+            profile_id=normalized_profile,
+        )
+
     def is_ready(self) -> bool:
-        return bool(self.browser and self.browser.is_connected() and self.page)
+        return bool(
+            self.runtime.is_ready()
+            and self.context is not None
+            and self.page is not None
+            and not self.page.is_closed()
+        )
 
     def stop(self) -> None:
-        if self.context is not None:
-            self.context.close()
-        if self.browser is not None:
-            self.browser.close()
-        if self.playwright is not None:
-            self.playwright.stop()
+        with self.lock:
+            self._stop_locked()
+
+    def _stop_locked(self) -> None:
+        if self.page is not None:
+            try:
+                self.page.close()
+            except Exception:
+                pass
+            finally:
+                self.page = None
+        self.context = None
+        self.runtime.stop()
+        self.proxy_url = ""
+        self.session_id = ""
+        self.profile_id = ""
+
+    @staticmethod
+    def _env_bool(name: str, default: bool) -> bool:
+        raw_value = os.getenv(name)
+        if raw_value is None or not raw_value.strip():
+            return default
+        return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _env_int(name: str, default: int) -> int:
+        raw_value = os.getenv(name)
+        if raw_value is None or not raw_value.strip():
+            return default
+        try:
+            return max(1, int(raw_value))
+        except ValueError:
+            return default

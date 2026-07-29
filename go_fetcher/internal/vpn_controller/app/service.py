@@ -1,5 +1,4 @@
 
-
 import json
 import logging
 import re
@@ -328,12 +327,13 @@ class VPNPreflightService:
             )
 
             if actual_exit_ip != profile.expected_exit_ip:
-                result.status = PreflightStatus.EXIT_IP_MISMATCH
-                result.error = (
-                    f"Expected exit IP {profile.expected_exit_ip}, "
-                    f"received {actual_exit_ip}"
+                logger.warning(
+                    "VPN profile exit IP changed profile=%r "
+                    "configured_exit_ip=%s actual_exit_ip=%s",
+                    profile.name,
+                    profile.expected_exit_ip,
+                    actual_exit_ip,
                 )
-                return result
 
             result.status = PreflightStatus.SUCCESS
             return result

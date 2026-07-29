@@ -1,5 +1,4 @@
 
-
 from collections import defaultdict
 
 from vpn_controller.app.models import (

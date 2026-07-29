@@ -32,7 +32,6 @@ def is_allowed_url(url: str) -> bool:
 
 app = Flask(__name__)
 browser = WBBrowser(resolve_cookie_path())
-browser.start()
 atexit.register(browser.stop)
 
 
@@ -45,7 +44,14 @@ def fetch():
 
     try:
         print(f"WB browser fetch requested: url={url}", flush=True)
-        result = browser.fetch(url)
+        result = browser.fetch(
+            url,
+            proxy_url=str(data.get("proxy_url") or "").strip(),
+            vpn_session_id=str(data.get("vpn_session_id") or "").strip(),
+            browser_profile_id=str(
+                data.get("browser_profile_id") or ""
+            ).strip(),
+        )
         body_text = str(result.get("body") or "")
         try:
             body = json.loads(body_text)
@@ -65,8 +71,21 @@ def fetch():
 
 @app.get("/api/v1/health")
 def health():
-    ready = browser.is_ready()
-    return jsonify({"status": "ok" if ready else "error"}), 200 if ready else 503
+    configuration_ready = browser.configuration_ready()
+    browser_ready = browser.is_ready()
+    return jsonify(
+        {
+            "status": "ok" if configuration_ready else "error",
+            "configuration_ready": configuration_ready,
+            "browser_ready": browser_ready,
+            "lazy_start": True,
+            "browser_engine": "google-chrome-stable-cdp",
+            "cdp_url": browser.runtime.config.cdp_url,
+            "proxy_enabled": bool(browser.proxy_url),
+            "vpn_session_id": browser.session_id,
+            "browser_profile_id": browser.profile_id,
+        }
+    ), 200 if configuration_ready else 503
 
 
 if __name__ == "__main__":

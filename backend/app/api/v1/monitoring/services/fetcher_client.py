@@ -51,6 +51,17 @@ class MonitoringFetcherInvalidResponseError(MonitoringFetcherError):
     pass
 
 
+class MonitoringFetcherTemporarilyUnavailableError(MonitoringFetcherError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        retry_after_seconds: int = 300,
+    ) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = max(1, int(retry_after_seconds))
+
+
 class MonitoringFetcherClient:
     def fetch_target(self, *, target: MonitoringTarget) -> FetchedProductData:
         return self.fetch_product(
@@ -160,15 +171,29 @@ class HttpMonitoringFetcherClient(MonitoringFetcherClient):
                 ) from exc
 
             except httpx.HTTPStatusError as exc:
-                result = "http_error"
-                status_class = build_http_status_class(
-                    exc.response.status_code
-                )
+                status_code = exc.response.status_code
+                status_class = build_http_status_class(status_code)
                 response_text = exc.response.text[:1000]
 
+                if status_code in {425, 429, 503}:
+                    result = "temporarily_unavailable"
+                    retry_after_seconds = _parse_retry_after_seconds(
+                        exc.response.headers.get("Retry-After")
+                    )
+                    error_message = _extract_fetcher_error_message(
+                        response=exc.response,
+                        fallback=response_text,
+                    )
+                    raise MonitoringFetcherTemporarilyUnavailableError(
+                        "go_fetcher is temporarily unavailable: "
+                        f"{error_message}",
+                        retry_after_seconds=retry_after_seconds,
+                    ) from exc
+
+                result = "http_error"
                 raise MonitoringFetcherError(
                     "go_fetcher returned HTTP "
-                    f"{exc.response.status_code}: {response_text}"
+                    f"{status_code}: {response_text}"
                 ) from exc
 
             except httpx.HTTPError as exc:
@@ -501,6 +526,33 @@ def _to_decimal_or_none(value: Any) -> Decimal | None:
         raise MonitoringFetcherInvalidResponseError(
             f"Invalid decimal value: {value!r}"
         ) from exc
+
+
+
+def _parse_retry_after_seconds(raw_value: str | None) -> int:
+    try:
+        value = int(str(raw_value or "").strip())
+    except (TypeError, ValueError):
+        return 300
+    return max(1, min(value, 3600))
+
+
+def _extract_fetcher_error_message(
+    *,
+    response: httpx.Response,
+    fallback: str,
+) -> str:
+    try:
+        payload = response.json()
+    except ValueError:
+        return fallback or "temporary gateway unavailability"
+
+    if isinstance(payload, dict):
+        message = payload.get("error") or payload.get("message")
+        if message:
+            return str(message)[:1000]
+
+    return fallback or "temporary gateway unavailability"
 
 
 def _cents_to_decimal_or_none(value: Any) -> Decimal | None:

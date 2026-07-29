@@ -1,8 +1,8 @@
 
-
 import logging
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 
 from vpn_controller.app.config import Settings
@@ -20,9 +20,11 @@ class PreflightScheduler:
         self,
         settings: Settings,
         service: VPNPreflightService,
+        before_cycle: Callable[[], None] | None = None,
     ) -> None:
         self.settings = settings
         self.service = service
+        self.before_cycle = before_cycle
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.last_error = ""
@@ -71,6 +73,8 @@ class PreflightScheduler:
                 cycle_started_at.isoformat(),
             )
             try:
+                if self.before_cycle is not None:
+                    self.before_cycle()
                 plan = self.service.run(
                     cycle_started_at=cycle_started_at
                 )

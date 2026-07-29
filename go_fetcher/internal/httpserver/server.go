@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"go_fetcher/internal/models"
+	"go_fetcher/internal/parsers/browsergateway"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -88,7 +89,7 @@ func (s *Server) Run(ctx context.Context) error {
 		Handler:           observeHTTPRequests(mux),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       20 * time.Second,
-		WriteTimeout:      75 * time.Second,
+		WriteTimeout:      430 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
 
@@ -515,6 +516,17 @@ func classifyParserError(err error) ParserErrorDetails {
 	errorText := strings.TrimSpace(err.Error())
 	lowerErrorText := strings.ToLower(errorText)
 	extraDetails := extractParserErrorDetails(err)
+
+	var temporaryUnavailable *browsergateway.TemporaryUnavailableError
+	if errors.As(err, &temporaryUnavailable) {
+		return ParserErrorDetails{
+			ErrorType:  "temporarily_unavailable",
+			StatusCode: http.StatusServiceUnavailable,
+			Message:    "VPN marketplace gateway is temporarily unavailable",
+			Error:      truncateString(errorText, 500),
+			Details:    extraDetails,
+		}
+	}
 
 	if strings.Contains(lowerErrorText, "temporarily blocked") &&
 		strings.Contains(lowerErrorText, "rate_limited") {

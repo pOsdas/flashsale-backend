@@ -1,5 +1,4 @@
 
-
 import os
 import signal
 import socket
@@ -123,6 +122,13 @@ class XrayProcess:
         raise XrayStartError(
             f"Xray did not open 127.0.0.1:{port} "
             f"within {timeout_seconds:.1f} seconds"
+        )
+
+
+    def is_running(self) -> bool:
+        return bool(
+            self.process is not None
+            and self.process.poll() is None
         )
 
     def stop(self) -> None:

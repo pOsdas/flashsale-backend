@@ -10,6 +10,9 @@ from app.api.v1.monitoring.models import (
     ProductSnapshot,
     SnapshotSource,
 )
+from app.api.v1.monitoring.services.fetcher_client import (
+    MonitoringFetcherTemporarilyUnavailableError,
+)
 from app.api.v1.monitoring.services.scanner import (
     MonitoringScanner,
     MonitoringTargetProcessResult,
@@ -142,3 +145,33 @@ class MonitoringScannerResilienceTests(TestCase):
         self.assertEqual(processed_count, 2)
         self.assertEqual(mock_process_target.call_count, 2)
         mock_update_schedule_metrics.assert_called_once_with()
+
+    def test_temporary_gateway_unavailability_postpones_without_snapshot(self):
+        cache_service = Mock()
+        cache_service.get_or_refresh_product.side_effect = (
+            MonitoringFetcherTemporarilyUnavailableError(
+                "VPN parse window is not ready yet",
+                retry_after_seconds=420,
+            )
+        )
+        scanner = MonitoringScanner(
+            product_cache_service=cache_service,
+        )
+
+        before = self.target.next_check_at
+        result = scanner.process_target(
+            target=self.target,
+            trigger="scanner",
+        )
+
+        self.target.refresh_from_db()
+        self.assertFalse(result.success)
+        self.assertTrue(result.busy)
+        self.assertEqual(ProductSnapshot.objects.count(), 0)
+        self.assertGreater(self.target.next_check_at, before)
+        self.assertIn(
+            "VPN parse window is not ready yet",
+            self.target.last_error,
+        )
+        self.assertNotEqual(self.target.status, "failed")
+

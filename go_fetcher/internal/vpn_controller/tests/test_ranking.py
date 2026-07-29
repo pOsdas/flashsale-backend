@@ -1,5 +1,4 @@
 
-
 import unittest
 
 from vpn_controller.app.models import PreflightResult, PreflightStatus

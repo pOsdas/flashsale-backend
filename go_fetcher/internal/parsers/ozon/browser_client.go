@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"go_fetcher/internal/models"
+	"go_fetcher/internal/parsers/browsergateway"
 	"io"
 	"log/slog"
 	"net/http"
@@ -175,6 +176,14 @@ func (c *BrowserClient) doPost(ctx context.Context, path string, requestPayload 
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("read browser fetcher response: %w", err)
+	}
+
+	if temporaryErr := browsergateway.TemporaryErrorFromHTTPResponse(
+		resp.StatusCode,
+		responseBody,
+		resp.Header.Get("Retry-After"),
+	); temporaryErr != nil {
+		return temporaryErr
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

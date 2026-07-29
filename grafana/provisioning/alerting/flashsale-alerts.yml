@@ -32,6 +32,10 @@ groups:
             or absent(up{job="go_fetcher"})
             or (up{job="ozon_browser_fetcher"} == bool 0)
             or absent(up{job="ozon_browser_fetcher"})
+            or (up{job="wb_browser_fetcher"} == bool 0)
+            or absent(up{job="wb_browser_fetcher"})
+            or (up{job="vpn_controller"} == bool 0)
+            or absent(up{job="vpn_controller"})
             or (up{job="postgres"} == bool 0)
             or absent(up{job="postgres"})
             or (up{job="redis"} == bool 0)
@@ -103,6 +107,10 @@ groups:
             or absent(probe_success{job="blackbox_http",instance="http://go_fetcher:8090/health"})
             or (probe_success{job="blackbox_http",instance="http://ozon_browser_fetcher:8095/api/v1/health"} == bool 0)
             or absent(probe_success{job="blackbox_http",instance="http://ozon_browser_fetcher:8095/api/v1/health"})
+            or (probe_success{job="blackbox_http",instance="http://wb_browser_fetcher:8096/api/v1/health"} == bool 0)
+            or absent(probe_success{job="blackbox_http",instance="http://wb_browser_fetcher:8096/api/v1/health"})
+            or (probe_success{job="blackbox_http",instance="http://vpn_controller:8097/api/v1/health"} == bool 0)
+            or absent(probe_success{job="blackbox_http",instance="http://vpn_controller:8097/api/v1/health"})
             or (probe_success{job="blackbox_http",instance="http://outbox_worker:9100/metrics"} == bool 0)
             or absent(probe_success{job="blackbox_http",instance="http://outbox_worker:9100/metrics"})
             or (probe_success{job="blackbox_http",instance="http://notification_consumer:8011/metrics"} == bool 0)
@@ -2098,4 +2106,118 @@ groups:
       severity: warning
       service: postgres
       category: application
+    isPaused: false
+
+- orgId: 1
+  name: Flashsale VPN parsing alerts
+  folder: Flashsale
+  interval: 30s
+  rules:
+  - uid: flashsale_vpn_ip_group_suspected_rejection
+    title: VPN IP Group Requires Manual Marketplace Check
+    condition: C
+    data:
+    - refId: A
+      datasourceUid: Prometheus
+      relativeTimeRange:
+        from: 300
+        to: 0
+      model:
+        expr: max by (marketplace, exit_ip) (vpn_group_suspected_rejection{job="vpn_controller"}) or vector(0)
+        refId: A
+        instant: true
+        range: false
+    - refId: B
+      datasourceUid: __expr__
+      model:
+        type: reduce
+        expression: A
+        reducer: last
+        refId: B
+    - refId: C
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0.5
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            type: last
+          type: query
+        refId: C
+    noDataState: OK
+    execErrState: Error
+    for: 1m
+    annotations:
+      summary: VPN IP-группа не прошла парсинг через несколько профилей
+      description: 'IP-группа {{ $labels.exit_ip }} не прошла парсинг {{ $labels.marketplace }} минимум через два разных профиля с подтверждённым выходным IP. Требуется ручная проверка; автоматическая блокировка IP не утверждается.'
+    labels:
+      severity: warning
+      service: vpn_controller
+      category: marketplace_access
+    isPaused: false
+  - uid: flashsale_vpn_group_unavailable
+    title: VPN Profile Group Unavailable
+    condition: C
+    data:
+    - refId: A
+      datasourceUid: Prometheus
+      relativeTimeRange:
+        from: 600
+        to: 0
+      model:
+        expr: |-
+          sum by (marketplace, exit_ip, reason) (
+            increase(vpn_group_parse_exhausted_total{
+              job="vpn_controller",
+              reason=~"vpn_group_unavailable|mixed_persistent_failures"
+            }[5m])
+          ) or vector(0)
+        refId: A
+        instant: true
+        range: false
+    - refId: B
+      datasourceUid: __expr__
+      model:
+        type: reduce
+        expression: A
+        reducer: last
+        refId: B
+    - refId: C
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            type: last
+          type: query
+        refId: C
+    noDataState: OK
+    execErrState: Error
+    for: 1m
+    annotations:
+      summary: VPN IP-группа не предоставила стабильный маршрут
+      description: 'Группа {{ $labels.exit_ip }} для {{ $labels.marketplace }} исчерпана. Причина: {{ $labels.reason }}. Это инфраструктурная или смешанная ошибка и не является подтверждением блокировки IP.'
+    labels:
+      severity: warning
+      service: vpn_controller
+      category: vpn_route
     isPaused: false

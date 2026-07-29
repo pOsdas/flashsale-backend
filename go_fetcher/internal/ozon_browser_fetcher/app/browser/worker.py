@@ -3,7 +3,10 @@ import threading
 import time
 import traceback
 from typing import Any, Dict, List, Optional
+from datetime import datetime
+from pathlib import Path
 
+from ozon_browser_fetcher.app.browser.errors import OzonAntibotRejectedError
 from ozon_browser_fetcher.app.browser.manager import BrowserManager
 from ozon_browser_fetcher.app.metrics import (
     OZON_BROWSER_LAST_SUCCESS_TIMESTAMP_SECONDS,
@@ -25,18 +28,18 @@ from ozon_browser_fetcher.app.models.product import Product
 from ozon_browser_fetcher.app.parsers.category_parser import (
     parse_category_from_page,
 )
-from ozon_browser_fetcher.app.parsers.product_parser import (
-    parse_product_from_page,
-)
 from ozon_browser_fetcher.app.parsers.search_parser import (
     parse_search_from_page,
+)
+from ozon_browser_fetcher.app.parsers.product_parser import (
+    parse_product_from_page,
 )
 
 
 class BrowserWorker:
     def __init__(self, cookie_path: str) -> None:
         self.cookie_path = cookie_path
-        self.manager = BrowserManager()
+        self.manager = BrowserManager(cookie_path=cookie_path)
 
         self.task_queue: queue.Queue = queue.Queue()
         self.ready_event = threading.Event()
@@ -71,19 +74,10 @@ class BrowserWorker:
             raise RuntimeError(self.startup_error)
 
     def _run(self) -> None:
-        try:
-            self.manager.start(self.cookie_path)
-            OZON_BROWSER_WORKER_RUNNING.set(1)
-            OZON_BROWSER_WORKER_READY.set(1)
-            observe_worker_heartbeat()
-            self.ready_event.set()
-
-        except Exception:
-            self.startup_error = traceback.format_exc()
-            OZON_BROWSER_WORKER_RUNNING.set(0)
-            OZON_BROWSER_WORKER_READY.set(0)
-            self.ready_event.set()
-            return
+        OZON_BROWSER_WORKER_RUNNING.set(1)
+        OZON_BROWSER_WORKER_READY.set(1)
+        observe_worker_heartbeat()
+        self.ready_event.set()
 
         try:
             while not self.stop_event.is_set():
@@ -122,6 +116,12 @@ class BrowserWorker:
         ).inc()
 
         try:
+            self.manager.ensure_session(
+                proxy_url=str(task.get("proxy_url") or ""),
+                session_id=str(task.get("vpn_session_id") or ""),
+                profile_id=str(task.get("browser_profile_id") or ""),
+            )
+
             if task_type == "product":
                 result = self._handle_product(task)
             elif task_type == "search":
@@ -157,6 +157,23 @@ class BrowserWorker:
                 }
             )
 
+        except OzonAntibotRejectedError as exc:
+            OZON_BROWSER_TASK_EXECUTIONS_TOTAL.labels(
+                task_type=task_type,
+                result="error",
+                error_type="marketplace_rejected",
+            ).inc()
+
+            task["result_queue"].put(
+                {
+                    "ok": False,
+                    "status": "marketplace_rejected",
+                    "error_type": "antibot",
+                    "error": str(exc),
+                    "trace": traceback.format_exc(),
+                }
+            )
+
         except Exception as exc:
             OZON_BROWSER_TASK_EXECUTIONS_TOTAL.labels(
                 task_type=task_type,
@@ -167,6 +184,8 @@ class BrowserWorker:
             task["result_queue"].put(
                 {
                     "ok": False,
+                    "status": "error",
+                    "error_type": classify_error(exc),
                     "error": str(exc),
                     "trace": traceback.format_exc(),
                 }
@@ -214,6 +233,49 @@ class BrowserWorker:
             product = parse_product_from_page(page, url)
 
             return product_to_dict(product)
+        except Exception:
+            diagnostics_dir = Path("/tmp/ozon-parser-diagnostics")
+            diagnostics_dir.mkdir(parents=True, exist_ok=True)
+
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+            html_path = diagnostics_dir / f"{timestamp}.html"
+            screenshot_path = diagnostics_dir / f"{timestamp}.png"
+            text_path = diagnostics_dir / f"{timestamp}.txt"
+
+            try:
+                html_path.write_text(
+                    page.content(),
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
+
+            try:
+                page.screenshot(
+                    path=str(screenshot_path),
+                    full_page=True,
+                )
+            except Exception:
+                pass
+
+            try:
+                body_text = page.locator("body").inner_text(timeout=3_000)
+                text_path.write_text(
+                    "\n".join(
+                        [
+                            f"requested_url={url}",
+                            f"current_url={page.url}",
+                            f"title={page.title()}",
+                            "",
+                            body_text,
+                        ]
+                    ),
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
+
+            raise
         finally:
             self.manager.close_page(page)
 
@@ -279,13 +341,17 @@ class BrowserWorker:
                 ).inc()
                 raise RuntimeError(self.startup_error)
 
-            if not self.is_healthy():
+            worker_thread_alive = bool(
+                self.thread is not None
+                and self.thread.is_alive()
+            )
+            if not worker_thread_alive:
                 OZON_BROWSER_TASK_REQUESTS_TOTAL.labels(
                     task_type=task_type,
                     result="worker_unavailable",
                 ).inc()
                 raise RuntimeError(
-                    "Ozon browser worker is not ready"
+                    "Ozon browser worker thread is not running"
                 )
 
             result_queue: queue.Queue = queue.Queue(maxsize=1)
@@ -333,11 +399,17 @@ class BrowserWorker:
         self,
         url: str,
         timeout_seconds: int = 90,
+        proxy_url: str = "",
+        vpn_session_id: str = "",
+        browser_profile_id: str = "",
     ) -> Dict[str, Any]:
         return self.submit_task(
             task={
                 "type": "product",
                 "url": url,
+                "proxy_url": proxy_url,
+                "vpn_session_id": vpn_session_id,
+                "browser_profile_id": browser_profile_id,
             },
             timeout_seconds=timeout_seconds,
         )
@@ -347,12 +419,18 @@ class BrowserWorker:
         query: str,
         limit: int = 10,
         timeout_seconds: int = 90,
+        proxy_url: str = "",
+        vpn_session_id: str = "",
+        browser_profile_id: str = "",
     ) -> Dict[str, Any]:
         return self.submit_task(
             task={
                 "type": "search",
                 "query": query,
                 "limit": limit,
+                "proxy_url": proxy_url,
+                "vpn_session_id": vpn_session_id,
+                "browser_profile_id": browser_profile_id,
             },
             timeout_seconds=timeout_seconds,
         )
@@ -362,12 +440,18 @@ class BrowserWorker:
         url: str,
         limit: int = 10,
         timeout_seconds: int = 90,
+        proxy_url: str = "",
+        vpn_session_id: str = "",
+        browser_profile_id: str = "",
     ) -> Dict[str, Any]:
         return self.submit_task(
             task={
                 "type": "category",
                 "url": url,
                 "limit": limit,
+                "proxy_url": proxy_url,
+                "vpn_session_id": vpn_session_id,
+                "browser_profile_id": browser_profile_id,
             },
             timeout_seconds=timeout_seconds,
         )
@@ -377,7 +461,7 @@ class BrowserWorker:
             self.startup_error is None
             and self.thread is not None
             and self.thread.is_alive()
-            and self.manager.is_ready()
+            and self.manager.configuration_ready()
         )
 
     def get_health_snapshot(self) -> Dict[str, Any]:
@@ -391,9 +475,16 @@ class BrowserWorker:
         return {
             "status": "ok" if healthy else "error",
             "worker_thread_alive": thread_alive,
+            "configuration_ready": self.manager.configuration_ready(),
             "browser_ready": browser_ready,
+            "lazy_start": True,
+            "browser_engine": "google-chrome-stable-cdp",
+            "cdp_url": self.manager.runtime.config.cdp_url,
             "queue_size": self.task_queue.qsize(),
             "startup_error": self.startup_error is not None,
+            "proxy_enabled": bool(self.manager.proxy_url),
+            "vpn_session_id": self.manager.session_id,
+            "browser_profile_id": self.manager.profile_id,
         }
 
     def stop(self) -> None:

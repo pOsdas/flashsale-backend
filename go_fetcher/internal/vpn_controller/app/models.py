@@ -1,5 +1,4 @@
 
-
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -13,6 +12,24 @@ class PreflightStatus(StrEnum):
     EXIT_IP_UNAVAILABLE = "exit_ip_unavailable"
     EXIT_IP_UNSTABLE = "exit_ip_unstable"
     EXIT_IP_MISMATCH = "exit_ip_mismatch"
+    INTERNAL_ERROR = "internal_error"
+
+
+class ParseAttemptStatus(StrEnum):
+    SUCCESS = "success"
+    PROFILE_NOT_FOUND = "profile_not_found"
+    CONFIG_INVALID = "config_invalid"
+    XRAY_START_FAILED = "xray_start_failed"
+    EXIT_IP_UNAVAILABLE = "exit_ip_unavailable"
+    EXIT_IP_MISMATCH = "exit_ip_mismatch"
+    WORKER_UNAVAILABLE = "worker_unavailable"
+    REQUEST_INVALID = "request_invalid"
+    MARKETPLACE_NOT_FOUND = "marketplace_not_found"
+    MARKETPLACE_TIMEOUT = "marketplace_timeout"
+    MARKETPLACE_CONNECTION_ERROR = "marketplace_connection_error"
+    MARKETPLACE_REJECTED = "marketplace_rejected"
+    PARSER_ERROR = "parser_error"
+    INVALID_RESPONSE = "invalid_response"
     INTERNAL_ERROR = "internal_error"
 
 
@@ -105,3 +122,33 @@ class PreflightPlan:
                 item.to_dict() for item in self.unavailable_profiles
             ],
         }
+
+
+@dataclass(slots=True)
+class ParseAttemptResult:
+    marketplace: str
+    cycle_id: str
+    group_exit_ip: str
+    profile_name: str
+    status: ParseAttemptStatus
+    confirmed_exit_ip: str = ""
+    worker_status_code: int = 0
+    duration_ms: float = 0.0
+    error: str = ""
+
+    @property
+    def successful(self) -> bool:
+        return self.status == ParseAttemptStatus.SUCCESS
+
+    @property
+    def confirmed_marketplace_attempt(self) -> bool:
+        return bool(self.confirmed_exit_ip and self.worker_status_code)
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["status"] = self.status.value
+        data["successful"] = self.successful
+        data["confirmed_marketplace_attempt"] = (
+            self.confirmed_marketplace_attempt
+        )
+        return data

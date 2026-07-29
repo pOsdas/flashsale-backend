@@ -18,6 +18,7 @@ type Config struct {
 	WBRetryBaseDelay               time.Duration
 	WBBrowserFetcherURL            string
 	WBBrowserFetcherEnabled        bool
+	WBBrowserFetcherRequired       bool
 	WBBrowserFetcherTimeoutSeconds int
 
 	OzonRequestDelay             time.Duration
@@ -27,6 +28,7 @@ type Config struct {
 
 	OzonBrowserFetcherURL            string
 	OzonBrowserFetcherEnabled        bool
+	OzonBrowserFetcherRequired       bool
 	OzonBrowserFetcherTimeoutSeconds int
 }
 
@@ -42,6 +44,7 @@ func Load() (*Config, error) {
 		WBRetryBaseDelay:               getEnvDurationMS("WB_RETRY_BASE_DELAY_MS", 1*time.Second),
 		WBBrowserFetcherURL:            os.Getenv("WB_BROWSER_FETCHER_URL"),
 		WBBrowserFetcherEnabled:        getEnvBool("WB_BROWSER_FETCHER_ENABLED", false),
+		WBBrowserFetcherRequired:       getEnvBool("WB_BROWSER_FETCHER_REQUIRED", false),
 		WBBrowserFetcherTimeoutSeconds: getEnvInt("WB_BROWSER_FETCHER_TIMEOUT_SECONDS", 35),
 
 		OzonRequestDelay:             getEnvDurationMS("OZON_REQUEST_DELAY_MS", 700*time.Millisecond),
@@ -51,6 +54,7 @@ func Load() (*Config, error) {
 
 		OzonBrowserFetcherURL:            os.Getenv("OZON_BROWSER_FETCHER_URL"),
 		OzonBrowserFetcherEnabled:        getEnvBool("OZON_BROWSER_FETCHER_ENABLED", false),
+		OzonBrowserFetcherRequired:       getEnvBool("OZON_BROWSER_FETCHER_REQUIRED", false),
 		OzonBrowserFetcherTimeoutSeconds: getEnvInt("OZON_BROWSER_FETCHER_TIMEOUT_SECONDS", 35),
 	}
 
@@ -66,8 +70,16 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("WB_MAX_RETRIES must be greater than or equal to zero")
 	}
 
+	if cfg.WBBrowserFetcherRequired && !cfg.WBBrowserFetcherEnabled {
+		return nil, fmt.Errorf("WB_BROWSER_FETCHER_REQUIRED requires WB_BROWSER_FETCHER_ENABLED=true")
+	}
+
 	if cfg.WBBrowserFetcherTimeoutSeconds <= 0 {
 		return nil, fmt.Errorf("WB_BROWSER_FETCHER_TIMEOUT_SECONDS must be greater than zero")
+	}
+
+	if cfg.OzonBrowserFetcherRequired && !cfg.OzonBrowserFetcherEnabled {
+		return nil, fmt.Errorf("OZON_BROWSER_FETCHER_REQUIRED requires OZON_BROWSER_FETCHER_ENABLED=true")
 	}
 
 	if cfg.OzonBrowserFetcherTimeoutSeconds <= 0 {

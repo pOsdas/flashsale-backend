@@ -11,6 +11,14 @@ def get_request_json() -> dict:
     return request.get_json(silent=True) or {}
 
 
+def get_proxy_context(data: dict) -> tuple[str, str, str]:
+    return (
+        str(data.get("proxy_url") or "").strip(),
+        str(data.get("vpn_session_id") or "").strip(),
+        str(data.get("browser_profile_id") or "").strip(),
+    )
+
+
 def get_int_value(
     data: dict,
     key: str,
@@ -38,8 +46,28 @@ def make_worker_response(result: dict):
     if result.get("ok"):
         return jsonify(result["data"]), 200
 
+    if result.get("status") == "marketplace_rejected":
+        return jsonify(
+            {
+                "status": "marketplace_rejected",
+                "error_type": result.get(
+                    "error_type",
+                    "antibot",
+                ),
+                "error": result.get(
+                    "error",
+                    "Ozon rejected the browser session",
+                ),
+            }
+        ), 403
+
     return jsonify(
         {
+            "status": "error",
+            "error_type": result.get(
+                "error_type",
+                "parser_error",
+            ),
             "error": result.get(
                 "error",
                 "unknown parser error",
@@ -58,9 +86,28 @@ def make_product_response(result: dict):
             }
         ), 200
 
+    if result.get("status") == "marketplace_rejected":
+        return jsonify(
+            {
+                "status": "marketplace_rejected",
+                "error_type": result.get(
+                    "error_type",
+                    "antibot",
+                ),
+                "error": result.get(
+                    "error",
+                    "Ozon rejected the browser session",
+                ),
+            }
+        ), 403
+
     return jsonify(
         {
             "status": "error",
+            "error_type": result.get(
+                "error_type",
+                "parser_error",
+            ),
             "error": result.get(
                 "error",
                 "unknown parser error",
@@ -96,11 +143,15 @@ def product():
         return jsonify({"error": "url is required"}), 400
 
     worker = get_browser_worker()
+    proxy_url, vpn_session_id, browser_profile_id = get_proxy_context(data)
 
     try:
         result = worker.parse_product(
             url=url,
             timeout_seconds=timeout_seconds,
+            proxy_url=proxy_url,
+            vpn_session_id=vpn_session_id,
+            browser_profile_id=browser_profile_id,
         )
 
         return make_product_response(result)
@@ -136,12 +187,16 @@ def search():
         return jsonify({"error": "query is required"}), 400
 
     worker = get_browser_worker()
+    proxy_url, vpn_session_id, browser_profile_id = get_proxy_context(data)
 
     try:
         result = worker.parse_search(
             query=query,
             limit=limit,
             timeout_seconds=timeout_seconds,
+            proxy_url=proxy_url,
+            vpn_session_id=vpn_session_id,
+            browser_profile_id=browser_profile_id,
         )
 
         return make_worker_response(result)
@@ -181,12 +236,16 @@ def category():
         return jsonify({"error": "url is required"}), 400
 
     worker = get_browser_worker()
+    proxy_url, vpn_session_id, browser_profile_id = get_proxy_context(data)
 
     try:
         result = worker.parse_category(
             url=url,
             limit=limit,
             timeout_seconds=timeout_seconds,
+            proxy_url=proxy_url,
+            vpn_session_id=vpn_session_id,
+            browser_profile_id=browser_profile_id,
         )
 
         return make_worker_response(result)

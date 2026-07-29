@@ -1,5 +1,3 @@
-
-
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +36,10 @@ def _get_float(name: str, default: float, minimum: float = 0.1) -> float:
     return value
 
 
+def _get_url(name: str, default: str) -> str:
+    return os.getenv(name, default).strip().rstrip("/")
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     subscriptions_path: Path
@@ -56,6 +58,16 @@ class Settings:
     max_profiles_per_group: int
     retained_runs: int
     run_preflight_on_start: bool
+    gateway_enabled: bool = True
+    require_parse_ready: bool = True
+    parse_proxy_port: int = 10808
+    parse_proxy_public_host: str = "vpn_controller"
+    parse_worker_timeout_seconds: float = 90.0
+    parse_attempt_timeout_seconds: int = 75
+    active_session_idle_seconds: int = 1200
+    marketplace_rejection_confirmations: int = 2
+    ozon_browser_url: str = "http://ozon_browser_fetcher:8095"
+    wb_browser_url: str = "http://wb_browser_fetcher:8096"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -97,9 +109,7 @@ class Settings:
                     "/app/state/latest-preflight.json",
                 )
             ),
-            runs_dir=Path(
-                os.getenv("VPN_RUNS_DIR", "/app/state/runs")
-            ),
+            runs_dir=Path(os.getenv("VPN_RUNS_DIR", "/app/state/runs")),
             xray_binary=Path(
                 os.getenv("VPN_XRAY_BINARY", "/usr/local/bin/xray")
             ),
@@ -127,5 +137,33 @@ class Settings:
             retained_runs=_get_int("VPN_RETAINED_RUNS", 5),
             run_preflight_on_start=_get_bool(
                 "VPN_RUN_PREFLIGHT_ON_START", True
+            ),
+            gateway_enabled=_get_bool("VPN_GATEWAY_ENABLED", True),
+            require_parse_ready=_get_bool(
+                "VPN_REQUIRE_PARSE_READY", True
+            ),
+            parse_proxy_port=_get_int("VPN_PARSE_PROXY_PORT", 10808),
+            parse_proxy_public_host=os.getenv(
+                "VPN_PARSE_PROXY_PUBLIC_HOST", "vpn_controller"
+            ).strip(),
+            parse_worker_timeout_seconds=_get_float(
+                "VPN_PARSE_WORKER_TIMEOUT_SECONDS", 90.0
+            ),
+            parse_attempt_timeout_seconds=_get_int(
+                "VPN_PARSE_ATTEMPT_TIMEOUT_SECONDS", 75, minimum=5
+            ),
+            active_session_idle_seconds=_get_int(
+                "VPN_ACTIVE_SESSION_IDLE_SECONDS", 1200
+            ),
+            marketplace_rejection_confirmations=_get_int(
+                "VPN_MARKETPLACE_REJECTION_CONFIRMATIONS", 2
+            ),
+            ozon_browser_url=_get_url(
+                "VPN_OZON_BROWSER_URL",
+                "http://ozon_browser_fetcher:8095",
+            ),
+            wb_browser_url=_get_url(
+                "VPN_WB_BROWSER_URL",
+                "http://wb_browser_fetcher:8096",
             ),
         )

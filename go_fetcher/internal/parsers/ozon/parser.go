@@ -23,29 +23,31 @@ const (
 )
 
 type Parser struct {
-	client                *http.Client
-	browserClient         *BrowserClient
-	logger                *slog.Logger
-	cookie                string
-	cookieProvider        cookies.Provider
-	requestDelay          time.Duration
-	maxRetries            int
-	retryBaseDelay        time.Duration
-	httpParserTimeout     time.Duration
-	browserFetcherTimeout time.Duration
+	client                 *http.Client
+	browserClient          *BrowserClient
+	logger                 *slog.Logger
+	cookie                 string
+	cookieProvider         cookies.Provider
+	requestDelay           time.Duration
+	maxRetries             int
+	retryBaseDelay         time.Duration
+	httpParserTimeout      time.Duration
+	browserFetcherTimeout  time.Duration
+	browserFetcherRequired bool
 }
 
 type ParserConfig struct {
-	Cookie                string
-	CookieProvider        cookies.Provider
-	Timeout               time.Duration
-	HTTPParserTimeout     time.Duration
-	RequestDelay          time.Duration
-	MaxRetries            int
-	RetryBaseDelay        time.Duration
-	BrowserFetcherURL     string
-	BrowserFetcherEnabled bool
-	BrowserFetcherTimeout time.Duration
+	Cookie                 string
+	CookieProvider         cookies.Provider
+	Timeout                time.Duration
+	HTTPParserTimeout      time.Duration
+	RequestDelay           time.Duration
+	MaxRetries             int
+	RetryBaseDelay         time.Duration
+	BrowserFetcherURL      string
+	BrowserFetcherEnabled  bool
+	BrowserFetcherRequired bool
+	BrowserFetcherTimeout  time.Duration
 }
 
 func NewParser(cfg ParserConfig, logger *slog.Logger) *Parser {
@@ -82,19 +84,24 @@ func NewParser(cfg ParserConfig, logger *slog.Logger) *Parser {
 			Timeout:   cfg.HTTPParserTimeout,
 			Transport: newOzonHTTPTransport(),
 		},
-		browserClient:         NewBrowserClient(cfg.BrowserFetcherEnabled, cfg.BrowserFetcherURL, cfg.BrowserFetcherTimeout, logger),
-		logger:                logger,
-		cookie:                cfg.Cookie,
-		cookieProvider:        cfg.CookieProvider,
-		requestDelay:          cfg.RequestDelay,
-		maxRetries:            cfg.MaxRetries,
-		retryBaseDelay:        cfg.RetryBaseDelay,
-		httpParserTimeout:     cfg.HTTPParserTimeout,
-		browserFetcherTimeout: cfg.BrowserFetcherTimeout,
+		browserClient:          NewBrowserClient(cfg.BrowserFetcherEnabled, cfg.BrowserFetcherURL, cfg.BrowserFetcherTimeout, logger),
+		logger:                 logger,
+		cookie:                 cfg.Cookie,
+		cookieProvider:         cfg.CookieProvider,
+		requestDelay:           cfg.RequestDelay,
+		maxRetries:             cfg.MaxRetries,
+		retryBaseDelay:         cfg.RetryBaseDelay,
+		httpParserTimeout:      cfg.HTTPParserTimeout,
+		browserFetcherTimeout:  cfg.BrowserFetcherTimeout,
+		browserFetcherRequired: cfg.BrowserFetcherRequired,
 	}
 }
 
 func (p *Parser) ParseProduct(ctx context.Context, productInput string) ([]models.Product, error) {
+	if p.browserFetcherRequired {
+		return p.parseProductBrowserRequired(ctx, productInput)
+	}
+
 	httpStartedAt := time.Now()
 	httpCtx, cancelHTTP := p.newHTTPParserContext(ctx)
 	products, err := p.parseProductHTTP(httpCtx, productInput)
@@ -252,6 +259,10 @@ func (p *Parser) SearchProducts(ctx context.Context, query string, limit int) ([
 		return nil, fmt.Errorf("limit must be greater than zero")
 	}
 
+	if p.browserFetcherRequired {
+		return p.searchProductsBrowserRequired(ctx, query, limit)
+	}
+
 	httpStartedAt := time.Now()
 	httpCtx, cancelHTTP := p.newHTTPParserContext(ctx)
 	products, err := p.fetchCatalogProducts(httpCtx, CatalogRequest{
@@ -330,6 +341,10 @@ func (p *Parser) CategoryProducts(ctx context.Context, categoryInput string, lim
 
 	if limit <= 0 {
 		return nil, fmt.Errorf("limit must be greater than zero")
+	}
+
+	if p.browserFetcherRequired {
+		return p.categoryProductsBrowserRequired(ctx, categoryInput, limit)
 	}
 
 	httpStartedAt := time.Now()

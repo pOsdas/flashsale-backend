@@ -28,29 +28,31 @@ const (
 )
 
 type Parser struct {
-	client         *http.Client
-	browserClient  *BrowserClient
-	logger         *slog.Logger
-	cookie         string
-	cookieProvider cookies.Provider
-	requestDelay   time.Duration
-	maxRetries     int
-	retryBaseDelay time.Duration
-	blockedUntil   time.Time
-	blockReason    string
-	blockMu        sync.RWMutex
+	client                 *http.Client
+	browserClient          *BrowserClient
+	browserFetcherRequired bool
+	logger                 *slog.Logger
+	cookie                 string
+	cookieProvider         cookies.Provider
+	requestDelay           time.Duration
+	maxRetries             int
+	retryBaseDelay         time.Duration
+	blockedUntil           time.Time
+	blockReason            string
+	blockMu                sync.RWMutex
 }
 
 type ParserConfig struct {
-	Cookie                string
-	CookieProvider        cookies.Provider
-	Timeout               time.Duration
-	RequestDelay          time.Duration
-	MaxRetries            int
-	RetryBaseDelay        time.Duration
-	BrowserFetcherURL     string
-	BrowserFetcherEnabled bool
-	BrowserFetcherTimeout time.Duration
+	Cookie                 string
+	CookieProvider         cookies.Provider
+	Timeout                time.Duration
+	RequestDelay           time.Duration
+	MaxRetries             int
+	RetryBaseDelay         time.Duration
+	BrowserFetcherURL      string
+	BrowserFetcherEnabled  bool
+	BrowserFetcherRequired bool
+	BrowserFetcherTimeout  time.Duration
 }
 
 type parserRequestError struct {
@@ -113,13 +115,14 @@ func NewParser(cfg ParserConfig, logger *slog.Logger) *Parser {
 		client: &http.Client{
 			Timeout: cfg.Timeout,
 		},
-		browserClient:  NewBrowserClient(cfg.BrowserFetcherEnabled, cfg.BrowserFetcherURL, cfg.BrowserFetcherTimeout),
-		logger:         logger,
-		cookie:         cfg.Cookie,
-		cookieProvider: cfg.CookieProvider,
-		requestDelay:   cfg.RequestDelay,
-		maxRetries:     cfg.MaxRetries,
-		retryBaseDelay: cfg.RetryBaseDelay,
+		browserClient:          NewBrowserClient(cfg.BrowserFetcherEnabled, cfg.BrowserFetcherURL, cfg.BrowserFetcherTimeout),
+		browserFetcherRequired: cfg.BrowserFetcherRequired,
+		logger:                 logger,
+		cookie:                 cfg.Cookie,
+		cookieProvider:         cfg.CookieProvider,
+		requestDelay:           cfg.RequestDelay,
+		maxRetries:             cfg.MaxRetries,
+		retryBaseDelay:         cfg.RetryBaseDelay,
 	}
 }
 

@@ -5,10 +5,13 @@ from typing import Any, Dict, List, Optional
 
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
 
+from ozon_browser_fetcher.app.browser.challenge import wait_for_ozon_page_ready
+from ozon_browser_fetcher.app.browser.errors import OzonAntibotRejectedError
 from ozon_browser_fetcher.app.models.product import Product
 
 
 DEFAULT_CURRENCY = "RUB"
+
 
 TECHNICAL_TITLES = {
     "default",
@@ -212,20 +215,53 @@ def is_antibot_page(page: Page, body_text: str) -> bool:
     current_url = page.url.lower()
     lower_body = body_text.lower()
 
-    markers = [
+    try:
+        page_title = page.title().strip().lower()
+    except Exception:
+        page_title = ""
+
+    url_markers = [
         "challenge.html",
         "block.html",
+    ]
+
+    title_markers = [
+        "antibot captcha",
+        "antibot",
+        "captcha",
+        "security check",
+        "access denied",
+    ]
+
+    body_markers = [
         "incidentid",
         "supporturl",
         "blockurl",
         "доступ ограничен",
         "проверяем ваш браузер",
         "security check",
+        "access denied",
     ]
 
-    for marker in markers:
-        if marker in current_url or marker in lower_body:
+    for marker in url_markers:
+        if marker in current_url:
             return True
+
+    for marker in title_markers:
+        if marker in page_title:
+            return True
+
+    for marker in body_markers:
+        if marker in lower_body:
+            return True
+
+    refresh_error_markers = [
+        "oops, something went wrong",
+        "please refresh the page",
+    ]
+
+    if all(marker in lower_body for marker in refresh_error_markers):
+        return True
 
     return False
 
@@ -621,7 +657,10 @@ def extract_title_from_dom(page: Page, body_text: str) -> str:
 
 def extract_product_from_dom(page: Page, product_id: str, body_text: str) -> Product:
     if is_antibot_page(page, body_text):
-        raise RuntimeError(f"ozon blocked by antibot page: current_url={page.url}")
+        raise OzonAntibotRejectedError(
+            f"Ozon returned antibot page: "
+            f"title={page.title()!r}, current_url={page.url!r}"
+        )
 
     title = extract_title_from_dom(page, body_text)
 
@@ -654,13 +693,15 @@ def wait_page_loaded(page: Page, url: str) -> None:
     page.goto(
         url,
         wait_until="domcontentloaded",
-        timeout=30_000,
+        timeout=45_000,
     )
+
+    wait_for_ozon_page_ready(page)
 
     try:
         page.wait_for_selector(
             'script[type="application/ld+json"], h1, meta[property="og:title"]',
-            timeout=2_000,
+            timeout=12_000,
         )
     except PlaywrightTimeoutError:
         pass
@@ -675,8 +716,21 @@ def parse_product_from_page(page: Page, url: str) -> Product:
 
     wait_page_loaded(page, normalized_url)
 
-    if is_antibot_url(page.url):
-        raise RuntimeError(f"ozon blocked by antibot page: current_url={page.url}")
+    try:
+        body_text = page.locator("body").inner_text(timeout=4_000)
+    except Exception:
+        body_text = ""
+
+    if is_antibot_url(page.url) or is_antibot_page(page, body_text):
+        try:
+            page_title = page.title()
+        except Exception:
+            page_title = ""
+
+        raise OzonAntibotRejectedError(
+            f"Ozon returned antibot page: "
+            f"title={page_title!r}, current_url={page.url!r}"
+        )
 
     json_ld_product = extract_product_from_json_ld(
         page=page,
@@ -694,8 +748,6 @@ def parse_product_from_page(page: Page, url: str) -> Product:
         product.product_path = extract_product_path_from_url(normalized_url)
 
         return product
-
-    body_text = page.locator("body").inner_text(timeout=4_000)
 
     dom_product = extract_product_from_dom(
         page=page,

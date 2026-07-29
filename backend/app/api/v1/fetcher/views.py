@@ -21,6 +21,9 @@ from app.api.v1.fetcher.serializers import (
     FetchProductResponseSerializer,
 )
 from app.api.v1.fetcher.services.fetch_product_service import FetchProductService
+from app.api.v1.monitoring.services.fetcher_client import (
+    MonitoringFetcherTemporarilyUnavailableError,
+)
 from app.api.v1.fetcher.services.fetcher_import_service import FetcherImportService
 from app.core.logging import get_logger
 
@@ -220,6 +223,7 @@ def import_fetcher_items(request):
         200: FetchProductResponseSerializer,
         400: OpenApiResponse(description="Invalid payload"),
         500: OpenApiResponse(description="Fetch product failed"),
+        503: OpenApiResponse(description="Marketplace parser is temporarily unavailable"),
     },
 )
 @api_view(["POST"])
@@ -247,6 +251,28 @@ def fetch_product(request):
 
     try:
         result = service.execute()
+    except MonitoringFetcherTemporarilyUnavailableError as e:
+        logger.warning(
+            "Fetch product postponed because marketplace parser is temporarily unavailable",
+            extra={
+                "marketplace": serializer.validated_data["marketplace"],
+                "url": serializer.validated_data["url"],
+                "error": str(e),
+                "retry_after_seconds": e.retry_after_seconds,
+            },
+        )
+
+        response = Response(
+            {
+                "success": False,
+                "error": "Marketplace parser is temporarily unavailable.",
+                "retry_after_seconds": e.retry_after_seconds,
+            },
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+        response["Retry-After"] = str(e.retry_after_seconds)
+        return response
+
     except Exception as e:
         logger.error(
             "Fetch product failed",

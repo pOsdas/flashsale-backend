@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go_fetcher/internal/parsers/browsergateway"
 	"io"
 	"net/http"
 	"strings"
@@ -69,6 +70,14 @@ func (c *BrowserClient) FetchJSON(ctx context.Context, requestURL string, target
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("read browser fetcher response: %w", err)
+	}
+
+	if temporaryErr := browsergateway.TemporaryErrorFromHTTPResponse(
+		resp.StatusCode,
+		body,
+		resp.Header.Get("Retry-After"),
+	); temporaryErr != nil {
+		return temporaryErr
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

@@ -11,6 +11,9 @@ from app.api.v1.monitoring.models import (
     ProductSnapshot,
     SnapshotParseStatus,
 )
+from app.api.v1.monitoring.services.fetcher_client import (
+    MonitoringFetcherTemporarilyUnavailableError,
+)
 from app.api.v1.monitoring.services.product_cache import (
     ProductCacheBusyError,
     ProductCacheService,
@@ -373,6 +376,48 @@ class MonitoringScanner:
                 ),
             )
 
+        except MonitoringFetcherTemporarilyUnavailableError as exc:
+            logger.warning(
+                "monitoring target processing postponed because marketplace gateway is temporarily unavailable",
+                extra={
+                    "service": "monitoring_scanner",
+                    "target_id": str(target.id),
+                    "marketplace": target.marketplace,
+                    "error": str(exc),
+                    "retry_after_seconds": exc.retry_after_seconds,
+                    "postpone_on_busy": postpone_on_busy,
+                    "trigger": trigger,
+                },
+            )
+
+            if postpone_on_busy:
+                target_still_exists = (
+                    self._postpone_target_after_temporary_unavailability(
+                        target=target,
+                        error=str(exc),
+                        retry_after_seconds=exc.retry_after_seconds,
+                    )
+                )
+
+                if not target_still_exists:
+                    return self._target_disappeared_result(
+                        target=target,
+                        trigger=trigger,
+                        error=str(exc),
+                    )
+
+            MONITORING_TARGET_PROCESSING_TOTAL.labels(
+                marketplace=marketplace_label,
+                trigger=trigger_label,
+                result="temporarily_unavailable",
+            ).inc()
+
+            return MonitoringTargetProcessResult(
+                success=False,
+                error=str(exc),
+                busy=True,
+            )
+
         except ProductCacheBusyError as exc:
             logger.warning(
                 "monitoring target processing postponed because product cache refresh is busy",
@@ -544,6 +589,44 @@ class MonitoringScanner:
                         "updated_at",
                     ]
                 )
+
+        return True
+
+    def _postpone_target_after_temporary_unavailability(
+        self,
+        *,
+        target: MonitoringTarget,
+        error: str,
+        retry_after_seconds: int,
+    ) -> bool:
+        retry_after_seconds = max(
+            5,
+            min(int(retry_after_seconds), 3600),
+        )
+
+        with transaction.atomic():
+            locked_target = (
+                MonitoringTarget.objects
+                .select_for_update()
+                .filter(id=target.id)
+                .first()
+            )
+
+            if locked_target is None:
+                return False
+
+            locked_target.next_check_at = (
+                timezone.now()
+                + timedelta(seconds=retry_after_seconds)
+            )
+            locked_target.last_error = error
+            locked_target.save(
+                update_fields=[
+                    "next_check_at",
+                    "last_error",
+                    "updated_at",
+                ]
+            )
 
         return True
 

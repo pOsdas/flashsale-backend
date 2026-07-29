@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 
-ARG XRAY_VERSION=26.7.11
+ARG XRAY_VERSION=26.3.27
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -30,4 +30,4 @@ RUN mkdir -p /app/state /app/state/runs
 
 EXPOSE 8097
 
-CMD ["gunicorn", "--bind", "0.0.0.0:8097", "--workers", "1", "--threads", "2", "--timeout", "180", "vpn_controller.manage:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8097", "--workers", "1", "--threads", "2", "--timeout", "600", "vpn_controller.manage:app"]

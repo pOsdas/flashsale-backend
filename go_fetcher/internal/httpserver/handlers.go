@@ -3,12 +3,14 @@ package httpserver
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
 	"go_fetcher/internal/observability"
+	"go_fetcher/internal/parsers/browsergateway"
 )
 
 func (s *Server) handleFetchProduct(w http.ResponseWriter, r *http.Request) {
@@ -121,6 +123,26 @@ func (s *Server) handleFetchProduct(w http.ResponseWriter, r *http.Request) {
 		classifiedError := classifyParserError(err)
 		result = "fetch_error"
 		errorType = classifiedError.ErrorType
+
+		var temporaryUnavailable *browsergateway.TemporaryUnavailableError
+		if errors.As(err, &temporaryUnavailable) {
+			result = "temporarily_unavailable"
+			errorType = "temporarily_unavailable"
+			if temporaryUnavailable.RetryAfterSeconds > 0 {
+				w.Header().Set(
+					"Retry-After",
+					fmt.Sprintf("%d", temporaryUnavailable.RetryAfterSeconds),
+				)
+			}
+			s.logger.Warn(
+				"marketplace gateway is temporarily unavailable",
+				"marketplace", req.Marketplace,
+				"url", req.URL,
+				"error", err,
+			)
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
 
 		s.logger.Error(
 			"failed to fetch product",
