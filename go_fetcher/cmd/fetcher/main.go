@@ -205,6 +205,14 @@ func runHTTPServer(
 		},
 		wbParser,
 		ozonParser,
+		httpserver.ParserHealthConfig{
+			MarketplaceTimeout: time.Duration(
+				cfg.ParserHealthMarketplaceTimeoutSeconds,
+			) * time.Second,
+			HandlerTimeout: time.Duration(
+				cfg.ParserHealthHandlerTimeoutSeconds,
+			) * time.Second,
+		},
 	)
 
 	if err := server.Run(ctx); err != nil {

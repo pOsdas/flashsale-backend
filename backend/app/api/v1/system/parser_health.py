@@ -51,9 +51,15 @@ class ParserHealthChecker:
         try:
             response = httpx.get(
                 url,
-                timeout=getattr(settings, "GO_FETCHER_TIMEOUT_SECONDS", 15),
+                timeout=httpx.Timeout(
+                    getattr(
+                        settings,
+                        "GO_FETCHER_PARSER_HEALTH_TIMEOUT_SECONDS",
+                        270,
+                    ),
+                    connect=10,
+                ),
             )
-            response.raise_for_status()
 
         except httpx.TimeoutException as exc:
             logger.warning(

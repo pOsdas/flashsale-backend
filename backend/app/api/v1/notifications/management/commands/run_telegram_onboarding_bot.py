@@ -1,6 +1,9 @@
+import httpx
+import time
 from django.conf import settings
 from django.core.management.base import BaseCommand
 from prometheus_client import start_http_server
+from app.core.logging import get_logger
 
 from app.api.v1.monitoring.services.product_preview import (
     ProductPreviewService,
@@ -54,6 +57,9 @@ from app.api.v1.notifications.telegram.user_context import (
 )
 
 
+logger = get_logger(__name__)
+
+
 class Command(BaseCommand):
     help = "Run Telegram bot polling"
 
@@ -77,9 +83,46 @@ class Command(BaseCommand):
         client = TelegramBotClient(
             token=bot_token,
         )
-        client.set_my_commands(
-            commands=TELEGRAM_BOT_COMMANDS,
-        )
+
+        commands_registered = False
+
+        for attempt in range(1, 4):
+            try:
+                client.set_my_commands(
+                    commands=TELEGRAM_BOT_COMMANDS,
+                )
+            except httpx.TransportError as exc:
+                logger.warning(
+                    "Telegram bot command registration failed",
+                    extra={
+                        "service": "telegram_bot",
+                        "attempt": attempt,
+                        "max_attempts": 3,
+                        "error": str(exc),
+                    },
+                )
+
+                if attempt < 3:
+                    time.sleep(attempt * 2)
+            else:
+                commands_registered = True
+
+                logger.info(
+                    "Telegram bot commands registered",
+                    extra={
+                        "service": "telegram_bot",
+                        "commands_count": len(TELEGRAM_BOT_COMMANDS),
+                    },
+                )
+                break
+
+        if not commands_registered:
+            logger.warning(
+                "Telegram bot started without updating command menu",
+                extra={
+                    "service": "telegram_bot",
+                },
+            )
 
         user_context_resolver = TelegramUserContextResolver()
         action_rate_limiter = TelegramActionRateLimiter(

@@ -4,6 +4,7 @@ import re
 import threading
 import time
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 from urllib.parse import parse_qs, quote_plus, urlparse
@@ -56,6 +57,28 @@ class WBBrowser:
             "WB_BROWSER_REQUEST_TIMEOUT_MS",
             60_000,
         )
+        self.ready_timeout_ms = self._env_int(
+            "WB_BROWSER_READY_TIMEOUT_MS",
+            25_000,
+        )
+        self.ready_poll_interval_ms = self._env_int(
+            "WB_BROWSER_READY_POLL_INTERVAL_MS",
+            500,
+        )
+        self.post_ready_delay_ms = self._env_int(
+            "WB_BROWSER_POST_READY_DELAY_MS",
+            2_000,
+        )
+        self.recovery_delay_ms = self._env_int(
+            "WB_BROWSER_RECOVERY_DELAY_MS",
+            6_000,
+        )
+        self.diagnostics_dir = Path(
+            os.getenv(
+                "WB_BROWSER_DIAGNOSTICS_DIR",
+                "/tmp/wb-browser-diagnostics",
+            )
+        )
 
     def start(
         self,
@@ -87,6 +110,10 @@ class WBBrowser:
             response = self.page.goto(
                 "https://www.wildberries.ru/",
                 wait_until="domcontentloaded",
+            )
+            self._wait_for_page_ready(
+                stage="startup_homepage",
+                require_search_content=False,
             )
             print(
                 "WB Google Chrome connected over CDP: "
@@ -159,12 +186,239 @@ class WBBrowser:
                 });
                 return {
                     status_code: response.status,
-                    body: await response.text()
+                    body: await response.text(),
+                    headers: Object.fromEntries(response.headers.entries()),
+                    response_url: response.url
                 };
             }
             """,
             url,
         )
+
+    def _wait_for_page_ready(
+        self,
+        *,
+        stage: str,
+        require_search_content: bool,
+    ) -> bool:
+        if self.page is None or self.context is None:
+            raise RuntimeError("WB browser page is not ready")
+
+        deadline = time.monotonic() + (self.ready_timeout_ms / 1000)
+        last_cookie_signature: tuple[str, ...] | None = None
+        stable_cookie_checks = 0
+        last_state: Dict = {}
+
+        while time.monotonic() < deadline:
+            try:
+                title = self.page.title().strip()
+            except Exception:
+                title = ""
+
+            try:
+                state = self.page.evaluate(
+                    r"""
+                    () => {
+                        const body = document.body;
+                        const bodyText = body ? (body.innerText || '') : '';
+                        const productLinks = document.querySelectorAll(
+                            'a[href*="/catalog/"][href*="/detail.aspx"]'
+                        ).length;
+                        const blocked = /403 forbidden|access denied|captcha|проверяем ваш браузер|что-то пошло не так/i.test(
+                            bodyText
+                        );
+                        return {
+                            body_length: bodyText.length,
+                            product_links: productLinks,
+                            blocked: blocked,
+                            ready_state: document.readyState
+                        };
+                    }
+                    """
+                )
+            except Exception:
+                state = {
+                    "body_length": 0,
+                    "product_links": 0,
+                    "blocked": False,
+                    "ready_state": "",
+                }
+
+            cookie_names = tuple(self._cookie_names())
+            if cookie_names == last_cookie_signature:
+                stable_cookie_checks += 1
+            else:
+                stable_cookie_checks = 0
+                last_cookie_signature = cookie_names
+
+            title_ready = bool(
+                title
+                and title != "..."
+                and "403 forbidden" not in title.lower()
+                and "captcha" not in title.lower()
+            )
+            body_ready = (
+                int(state.get("body_length") or 0) >= 500
+                and not bool(state.get("blocked"))
+            )
+            search_ready = (
+                not require_search_content
+                or int(state.get("product_links") or 0) > 0
+            )
+            cookies_stable = stable_cookie_checks >= 2
+
+            last_state = {
+                "title": title,
+                "url": self.page.url,
+                "body_length": int(state.get("body_length") or 0),
+                "product_links": int(state.get("product_links") or 0),
+                "blocked": bool(state.get("blocked")),
+                "ready_state": str(state.get("ready_state") or ""),
+                "cookies": list(cookie_names),
+                "cookies_stable": cookies_stable,
+            }
+
+            if title_ready and body_ready and search_ready and cookies_stable:
+                if self.post_ready_delay_ms > 0:
+                    self.page.wait_for_timeout(self.post_ready_delay_ms)
+                print(
+                    "WB browser page ready: "
+                    f"stage={stage}, url={self.page.url}, "
+                    f"title={title!r}, "
+                    f"body_length={last_state['body_length']}, "
+                    f"product_links={last_state['product_links']}, "
+                    f"cookies={last_state['cookies']}",
+                    flush=True,
+                )
+                return True
+
+            self.page.wait_for_timeout(self.ready_poll_interval_ms)
+
+        print(
+            "WB browser page readiness timeout: "
+            f"stage={stage}, state={json.dumps(last_state, ensure_ascii=False)}",
+            flush=True,
+        )
+        return False
+
+    def _save_diagnostics(
+        self,
+        *,
+        stage: str,
+        request_url: str,
+        result: Optional[Dict] = None,
+        error: str = "",
+    ) -> None:
+        if self.page is None:
+            return
+
+        try:
+            self.diagnostics_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+            safe_stage = re.sub(r"[^a-zA-Z0-9_-]+", "-", stage).strip("-")
+            prefix = self.diagnostics_dir / f"{timestamp}-{safe_stage}"
+
+            try:
+                title = self.page.title()
+            except Exception:
+                title = ""
+
+            try:
+                body_text = self.page.locator("body").inner_text(timeout=5_000)
+            except Exception as exc:
+                body_text = f"Could not read body: {exc}"
+
+            try:
+                html = self.page.content()
+            except Exception as exc:
+                html = f"Could not read HTML: {exc}"
+
+            cookies = []
+            if self.context is not None:
+                for cookie in self.context.cookies():
+                    cookies.append(
+                        {
+                            "name": cookie.get("name"),
+                            "domain": cookie.get("domain"),
+                            "path": cookie.get("path"),
+                            "expires": cookie.get("expires"),
+                            "httpOnly": cookie.get("httpOnly"),
+                            "secure": cookie.get("secure"),
+                            "sameSite": cookie.get("sameSite"),
+                        }
+                    )
+
+            try:
+                storage = self.page.evaluate(
+                    r"""
+                    () => ({
+                        local_storage_keys: Object.keys(localStorage),
+                        session_storage_keys: Object.keys(sessionStorage)
+                    })
+                    """
+                )
+            except Exception as exc:
+                storage = {"error": str(exc)}
+
+            metadata = {
+                "stage": stage,
+                "request_url": request_url,
+                "page_url": self.page.url,
+                "title": title,
+                "profile_id": self.profile_id,
+                "session_id": self.session_id,
+                "proxy_enabled": bool(self.proxy_url),
+                "cookies": cookies,
+                "storage": storage,
+                "result": result or {},
+                "error": error,
+            }
+
+            prefix.with_suffix(".json").write_text(
+                json.dumps(metadata, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            prefix.with_suffix(".html").write_text(
+                html,
+                encoding="utf-8",
+            )
+            prefix.with_suffix(".txt").write_text(
+                "\n".join(
+                    [
+                        f"stage={stage}",
+                        f"request_url={request_url}",
+                        f"page_url={self.page.url}",
+                        f"title={title}",
+                        f"error={error}",
+                        "",
+                        body_text,
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            try:
+                self.page.screenshot(
+                    path=str(prefix.with_suffix(".png")),
+                    full_page=True,
+                )
+            except Exception as exc:
+                print(
+                    "WB browser diagnostic screenshot failed: "
+                    f"stage={stage}, error={exc}",
+                    flush=True,
+                )
+
+            print(
+                "WB browser diagnostics saved: "
+                f"stage={stage}, prefix={prefix}",
+                flush=True,
+            )
+        except Exception as exc:
+            print(
+                "WB browser diagnostics failed: "
+                f"stage={stage}, error={exc}",
+                flush=True,
+            )
 
     @staticmethod
     def _referer_for_api_url(url: str) -> str:
@@ -231,7 +485,13 @@ class WBBrowser:
 
         self.page.on("response", capture_response)
         response = self.page.goto(referer, wait_until="domcontentloaded")
-        time.sleep(2)
+        self._wait_for_page_ready(
+            stage="request_page",
+            require_search_content=(
+                "/search/" in urlparse(url).path
+                and bool(str((original_query.get("query") or [""])[0]).strip())
+            ),
+        )
         self.page.remove_listener("response", capture_response)
         title = self.page.title()
         dom_candidates: Dict[str, List[str]] = {}
@@ -481,7 +741,12 @@ class WBBrowser:
             "https://www.wildberries.ru/",
             wait_until="domcontentloaded",
         )
-        time.sleep(5)
+        self._wait_for_page_ready(
+            stage="recovery_homepage",
+            require_search_content=False,
+        )
+        if self.recovery_delay_ms > 0:
+            self.page.wait_for_timeout(self.recovery_delay_ms)
         print(
             "WB browser session recovery finished: "
             f"homepage_status={response.status if response else 0}, "
@@ -520,14 +785,31 @@ class WBBrowser:
             )
 
             if status_code in {403, 498}:
+                self._save_diagnostics(
+                    stage="before_recovery",
+                    request_url=url,
+                    result=result,
+                )
                 self._recover_antibot_session()
+                captured_result = self._prepare_page_for_request(url)
+                if captured_result is not None:
+                    return captured_result
+
                 result = self._fetch_once(url)
+                recovered_status = int(result.get("status_code") or 0)
                 print(
                     "WB browser fetch after recovery completed: "
-                    f"status={int(result.get('status_code') or 0)}, "
+                    f"status={recovered_status}, "
                     f"url={url}",
                     flush=True,
                 )
+
+                if recovered_status in {403, 498}:
+                    self._save_diagnostics(
+                        stage="after_recovery_rejected",
+                        request_url=url,
+                        result=result,
+                    )
 
             return result
 

@@ -195,6 +195,12 @@ GO_FETCHER_TIMEOUT_SECONDS = int(
         "60",
     )
 )
+GO_FETCHER_PARSER_HEALTH_TIMEOUT_SECONDS = int(
+    os.getenv(
+        "GO_FETCHER_PARSER_HEALTH_TIMEOUT_SECONDS",
+        "270",
+    )
+)
 
 # Load testing
 LOAD_TESTING_ENABLED = (

@@ -22,14 +22,20 @@ type ProductSearchParser interface {
 	ParseProduct(ctx context.Context, productInput string) ([]models.Product, error)
 }
 
+type ParserHealthConfig struct {
+	MarketplaceTimeout time.Duration
+	HandlerTimeout     time.Duration
+}
+
 type Server struct {
-	addr        string
-	apiKey      string
-	logger      *slog.Logger
-	wbFetcher   ProductFetcher
-	ozonFetcher ProductFetcher
-	wbParser    ProductSearchParser
-	ozonParser  ProductSearchParser
+	addr               string
+	apiKey             string
+	logger             *slog.Logger
+	wbFetcher          ProductFetcher
+	ozonFetcher        ProductFetcher
+	wbParser           ProductSearchParser
+	ozonParser         ProductSearchParser
+	parserHealthConfig ParserHealthConfig
 }
 
 type ParserHealthResponse struct {
@@ -62,15 +68,17 @@ func NewServer(
 	ozonFetcher ProductFetcher,
 	wbParser ProductSearchParser,
 	ozonParser ProductSearchParser,
+	parserHealthConfig ParserHealthConfig,
 ) *Server {
 	return &Server{
-		addr:        addr,
-		apiKey:      apiKey,
-		logger:      logger,
-		wbFetcher:   wbFetcher,
-		ozonFetcher: ozonFetcher,
-		wbParser:    wbParser,
-		ozonParser:  ozonParser,
+		addr:               addr,
+		apiKey:             apiKey,
+		logger:             logger,
+		wbFetcher:          wbFetcher,
+		ozonFetcher:        ozonFetcher,
+		wbParser:           wbParser,
+		ozonParser:         ozonParser,
+		parserHealthConfig: parserHealthConfig,
 	}
 }
 
@@ -152,7 +160,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	)
 }
 
-func (s *Server) handleParserHealth(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleParserHealth(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
 	if r.Method != http.MethodGet {
 		writeHealthJSON(
 			w,
@@ -172,30 +183,38 @@ func (s *Server) handleParserHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
+	handlerCtx, cancel := context.WithTimeout(
+		r.Context(),
+		s.parserHealthConfig.HandlerTimeout,
+	)
 	defer cancel()
 
 	checks := map[string]ParserHealthItem{
 		"go_fetcher": {
 			Status: "ok",
 			Details: map[string]interface{}{
-				"service":  "go_fetcher",
-				"endpoint": "/api/v1/parser/health",
+				"service":                     "go_fetcher",
+				"endpoint":                    "/api/v1/parser/health",
+				"execution_mode":              "sequential",
+				"marketplace_timeout_seconds": s.parserHealthConfig.MarketplaceTimeout.Seconds(),
+				"handler_timeout_seconds":     s.parserHealthConfig.HandlerTimeout.Seconds(),
 			},
 		},
-		"wb": s.checkMarketplaceParser(
-			ctx,
-			"wb",
-			"iphone",
-			s.wbParser,
-		),
-		"ozon": s.checkMarketplaceParser(
-			ctx,
-			"ozon",
-			"iphone",
-			s.ozonParser,
-		),
 	}
+
+	checks["wb"] = s.checkMarketplaceParserWithTimeout(
+		handlerCtx,
+		"wb",
+		"iphone",
+		s.wbParser,
+	)
+
+	checks["ozon"] = s.checkMarketplaceParserWithTimeout(
+		handlerCtx,
+		"ozon",
+		"iphone",
+		s.ozonParser,
+	)
 
 	response := ParserHealthResponse{
 		Status: s.buildParserHealthStatus(checks),
@@ -208,7 +227,31 @@ func (s *Server) handleParserHealth(w http.ResponseWriter, r *http.Request) {
 		statusCode = http.StatusServiceUnavailable
 	}
 
-	writeHealthJSON(w, statusCode, response)
+	writeHealthJSON(
+		w,
+		statusCode,
+		response,
+	)
+}
+
+func (s *Server) checkMarketplaceParserWithTimeout(
+	parentCtx context.Context,
+	marketplace string,
+	query string,
+	parser ProductSearchParser,
+) ParserHealthItem {
+	ctx, cancel := context.WithTimeout(
+		parentCtx,
+		s.parserHealthConfig.MarketplaceTimeout,
+	)
+	defer cancel()
+
+	return s.checkMarketplaceParser(
+		ctx,
+		marketplace,
+		query,
+		parser,
+	)
 }
 
 func (s *Server) checkMarketplaceParser(

@@ -13,6 +13,9 @@ type Config struct {
 
 	Timeout time.Duration
 
+	ParserHealthMarketplaceTimeoutSeconds int
+	ParserHealthHandlerTimeoutSeconds     int
+
 	WBRequestDelay                 time.Duration
 	WBMaxRetries                   int
 	WBRetryBaseDelay               time.Duration
@@ -39,6 +42,15 @@ func Load() (*Config, error) {
 
 		Timeout: 30 * time.Second,
 
+		ParserHealthMarketplaceTimeoutSeconds: getEnvInt(
+			"PARSER_HEALTH_MARKETPLACE_TIMEOUT_SECONDS",
+			120,
+		),
+		ParserHealthHandlerTimeoutSeconds: getEnvInt(
+			"PARSER_HEALTH_HANDLER_TIMEOUT_SECONDS",
+			250,
+		),
+
 		WBRequestDelay:                 getEnvDurationMS("WB_REQUEST_DELAY_MS", 700*time.Millisecond),
 		WBMaxRetries:                   getEnvInt("WB_MAX_RETRIES", 3),
 		WBRetryBaseDelay:               getEnvDurationMS("WB_RETRY_BASE_DELAY_MS", 1*time.Second),
@@ -64,6 +76,20 @@ func Load() (*Config, error) {
 
 	if cfg.FetcherAPIKey == "" {
 		return nil, fmt.Errorf("FETCHER_API_KEY is required")
+	}
+
+	if cfg.ParserHealthMarketplaceTimeoutSeconds <= 0 {
+		return nil, fmt.Errorf(
+			"PARSER_HEALTH_MARKETPLACE_TIMEOUT_SECONDS must be greater than zero",
+		)
+	}
+
+	minimumHandlerTimeout := cfg.ParserHealthMarketplaceTimeoutSeconds * 2
+
+	if cfg.ParserHealthHandlerTimeoutSeconds <= minimumHandlerTimeout {
+		return nil, fmt.Errorf(
+			"PARSER_HEALTH_HANDLER_TIMEOUT_SECONDS must be greater than twice PARSER_HEALTH_MARKETPLACE_TIMEOUT_SECONDS",
+		)
 	}
 
 	if cfg.WBMaxRetries < 0 {

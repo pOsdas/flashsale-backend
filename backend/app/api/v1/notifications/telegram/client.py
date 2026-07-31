@@ -47,6 +47,7 @@ class TelegramBotClient:
                 write=10,
                 pool=10,
             ),
+            trust_env=False,
         )
 
     def drop_pending_updates(self) -> None:
