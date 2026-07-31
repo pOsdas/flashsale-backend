@@ -79,6 +79,18 @@ class WBBrowser:
                 "/tmp/wb-browser-diagnostics",
             )
         )
+        self.diagnostics_max_sets = self._env_int(
+            "WB_BROWSER_DIAGNOSTICS_MAX_SETS",
+            10,
+        )
+        self.diagnostics_max_age_hours = self._env_int(
+            "WB_BROWSER_DIAGNOSTICS_MAX_AGE_HOURS",
+            72,
+        )
+        self.diagnostics_max_total_mb = self._env_int(
+            "WB_BROWSER_DIAGNOSTICS_MAX_TOTAL_MB",
+            100,
+        )
 
     def start(
         self,
@@ -301,6 +313,94 @@ class WBBrowser:
         )
         return False
 
+    def _cleanup_diagnostics(self) -> None:
+        if not self.diagnostics_dir.exists():
+            return
+
+        now = time.time()
+        max_age_seconds = self.diagnostics_max_age_hours * 60 * 60
+
+        files = [
+            path
+            for path in self.diagnostics_dir.iterdir()
+            if path.is_file()
+        ]
+
+        # Сначала удаляем слишком старые файлы.
+        for path in files:
+            try:
+                if now - path.stat().st_mtime > max_age_seconds:
+                    path.unlink()
+            except OSError as exc:
+                print(
+                    "WB browser old diagnostic cleanup failed: "
+                    f"path={path}, error={exc}",
+                    flush=True,
+                )
+
+        files = [
+            path
+            for path in self.diagnostics_dir.iterdir()
+            if path.is_file()
+        ]
+
+        # Группируем PNG/HTML/TXT/JSON одного события.
+        sets: Dict[str, List[Path]] = {}
+
+        for path in files:
+            sets.setdefault(path.stem, []).append(path)
+
+        ordered_sets = sorted(
+            sets.values(),
+            key=lambda paths: max(
+                path.stat().st_mtime
+                for path in paths
+            ),
+            reverse=True,
+        )
+
+        # Оставляем только последние N наборов.
+        for paths in ordered_sets[self.diagnostics_max_sets:]:
+            for path in paths:
+                try:
+                    path.unlink()
+                except OSError as exc:
+                    print(
+                        "WB browser excess diagnostic cleanup failed: "
+                        f"path={path}, error={exc}",
+                        flush=True,
+                    )
+
+        remaining_files = sorted(
+            (
+                path
+                for path in self.diagnostics_dir.iterdir()
+                if path.is_file()
+            ),
+            key=lambda path: path.stat().st_mtime,
+        )
+
+        max_total_bytes = self.diagnostics_max_total_mb * 1024 * 1024
+        total_bytes = sum(
+            path.stat().st_size
+            for path in remaining_files
+        )
+
+        # Жесткий предел по общему размеру
+        while remaining_files and total_bytes > max_total_bytes:
+            oldest = remaining_files.pop(0)
+
+            try:
+                file_size = oldest.stat().st_size
+                oldest.unlink()
+                total_bytes -= file_size
+            except OSError as exc:
+                print(
+                    "WB browser size diagnostic cleanup failed: "
+                    f"path={oldest}, error={exc}",
+                    flush=True,
+                )
+
     def _save_diagnostics(
         self,
         *,
@@ -314,6 +414,7 @@ class WBBrowser:
 
         try:
             self.diagnostics_dir.mkdir(parents=True, exist_ok=True)
+            self._cleanup_diagnostics()
             timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
             safe_stage = re.sub(r"[^a-zA-Z0-9_-]+", "-", stage).strip("-")
             prefix = self.diagnostics_dir / f"{timestamp}-{safe_stage}"
@@ -408,6 +509,7 @@ class WBBrowser:
                     flush=True,
                 )
 
+            self._cleanup_diagnostics()
             print(
                 "WB browser diagnostics saved: "
                 f"stage={stage}, prefix={prefix}",
@@ -785,11 +887,6 @@ class WBBrowser:
             )
 
             if status_code in {403, 498}:
-                self._save_diagnostics(
-                    stage="before_recovery",
-                    request_url=url,
-                    result=result,
-                )
                 self._recover_antibot_session()
                 captured_result = self._prepare_page_for_request(url)
                 if captured_result is not None:

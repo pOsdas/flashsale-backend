@@ -1,3 +1,4 @@
+import os
 import queue
 import threading
 import time
@@ -47,6 +48,25 @@ class BrowserWorker:
 
         self.thread: Optional[threading.Thread] = None
         self.startup_error: Optional[str] = None
+
+        self.diagnostics_dir = Path(
+            os.getenv(
+                "OZON_BROWSER_DIAGNOSTICS_DIR",
+                "/tmp/ozon-parser-diagnostics",
+            )
+        )
+        self.diagnostics_max_sets = self._env_int(
+            "OZON_BROWSER_DIAGNOSTICS_MAX_SETS",
+            10,
+        )
+        self.diagnostics_max_age_hours = self._env_int(
+            "OZON_BROWSER_DIAGNOSTICS_MAX_AGE_HOURS",
+            72,
+        )
+        self.diagnostics_max_total_mb = self._env_int(
+            "OZON_BROWSER_DIAGNOSTICS_MAX_TOTAL_MB",
+            100,
+        )
 
     def start(self) -> None:
         if self.thread is not None and self.thread.is_alive():
@@ -234,13 +254,27 @@ class BrowserWorker:
 
             return product_to_dict(product)
         except Exception:
-            diagnostics_dir = Path("/tmp/ozon-parser-diagnostics")
-            diagnostics_dir.mkdir(parents=True, exist_ok=True)
+            self.diagnostics_dir.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+            self._cleanup_diagnostics()
 
-            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-            html_path = diagnostics_dir / f"{timestamp}.html"
-            screenshot_path = diagnostics_dir / f"{timestamp}.png"
-            text_path = diagnostics_dir / f"{timestamp}.txt"
+            timestamp = datetime.now().strftime(
+                "%Y%m%d-%H%M%S-%f"
+            )
+            html_path = (
+                    self.diagnostics_dir
+                    / f"{timestamp}.html"
+            )
+            screenshot_path = (
+                    self.diagnostics_dir
+                    / f"{timestamp}.png"
+            )
+            text_path = (
+                    self.diagnostics_dir
+                    / f"{timestamp}.txt"
+            )
 
             try:
                 html_path.write_text(
@@ -275,6 +309,13 @@ class BrowserWorker:
             except Exception:
                 pass
 
+            self._cleanup_diagnostics()
+
+            print(
+                "Ozon parser diagnostics saved: "
+                f"prefix={self.diagnostics_dir / timestamp}",
+                flush=True,
+            )
             raise
         finally:
             self.manager.close_page(page)
@@ -495,6 +536,117 @@ class BrowserWorker:
             and self.thread.is_alive()
         ):
             self.thread.join(timeout=10)
+
+    @staticmethod
+    def _env_int(
+            name: str,
+            default: int,
+    ) -> int:
+        raw_value = os.getenv(name)
+
+        if raw_value is None or not raw_value.strip():
+            return default
+
+        try:
+            return max(1, int(raw_value))
+        except ValueError:
+            return default
+
+    def _cleanup_diagnostics(self) -> None:
+        if not self.diagnostics_dir.exists():
+            return
+
+        now = time.time()
+        max_age_seconds = self.diagnostics_max_age_hours * 60 * 60
+
+        files = [
+            path
+            for path in self.diagnostics_dir.iterdir()
+            if path.is_file()
+        ]
+
+        # Удаляем файлы старше заданного срока.
+        for path in files:
+            try:
+                if now - path.stat().st_mtime > max_age_seconds:
+                    path.unlink()
+            except OSError as exc:
+                print(
+                    "Ozon old diagnostic cleanup failed: "
+                    f"path={path}, error={exc}",
+                    flush=True,
+                )
+
+        files = [
+            path
+            for path in self.diagnostics_dir.iterdir()
+            if path.is_file()
+        ]
+
+        # У каждого события одинаковое имя без расширения.
+        diagnostic_sets: Dict[str, List[Path]] = {}
+
+        for path in files:
+            diagnostic_sets.setdefault(
+                path.stem,
+                [],
+            ).append(path)
+
+        ordered_sets = sorted(
+            diagnostic_sets.values(),
+            key=lambda paths: max(
+                path.stat().st_mtime
+                for path in paths
+            ),
+            reverse=True,
+        )
+
+        # Оставляем только последние N событий.
+        for paths in ordered_sets[self.diagnostics_max_sets:]:
+            for path in paths:
+                try:
+                    path.unlink()
+                except OSError as exc:
+                    print(
+                        "Ozon excess diagnostic cleanup failed: "
+                        f"path={path}, error={exc}",
+                        flush=True,
+                    )
+
+        remaining_files = sorted(
+            (
+                path
+                for path in self.diagnostics_dir.iterdir()
+                if path.is_file()
+            ),
+            key=lambda path: path.stat().st_mtime,
+        )
+
+        max_total_bytes = (
+                self.diagnostics_max_total_mb
+                * 1024
+                * 1024
+        )
+
+        total_bytes = sum(
+            path.stat().st_size
+            for path in remaining_files
+        )
+
+        # Жёсткое ограничение общего размера директории.
+        while remaining_files and total_bytes > max_total_bytes:
+            oldest_path = remaining_files.pop(0)
+
+            try:
+                file_size = oldest_path.stat().st_size
+                oldest_path.unlink()
+                total_bytes -= file_size
+            except OSError as exc:
+                print(
+                    "Ozon diagnostic size cleanup failed: "
+                    f"path={oldest_path}, error={exc}",
+                    flush=True,
+                )
 
     def _update_queue_size(self) -> None:
         OZON_BROWSER_QUEUE_SIZE.set(

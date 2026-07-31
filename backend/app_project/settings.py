@@ -356,6 +356,48 @@ NOTIFICATION_RABBITMQ_ROUTING_KEYS = [
     if item.strip()
 ]
 
+NOTIFICATION_RABBITMQ_QUEUE_MAX_LENGTH = int(
+    os.getenv(
+        "NOTIFICATION_RABBITMQ_QUEUE_MAX_LENGTH",
+        "50000",
+    )
+)
+
+NOTIFICATION_RABBITMQ_QUEUE_MAX_LENGTH_BYTES = int(
+    os.getenv(
+        "NOTIFICATION_RABBITMQ_QUEUE_MAX_LENGTH_BYTES",
+        str(256 * 1024 * 1024),
+    )
+)
+
+NOTIFICATION_RABBITMQ_MESSAGE_TTL_MS = int(
+    os.getenv(
+        "NOTIFICATION_RABBITMQ_MESSAGE_TTL_MS",
+        str(7 * 24 * 60 * 60 * 1000),
+    )
+)
+
+NOTIFICATION_RABBITMQ_DLQ_MAX_LENGTH = int(
+    os.getenv(
+        "NOTIFICATION_RABBITMQ_DLQ_MAX_LENGTH",
+        "10000",
+    )
+)
+
+NOTIFICATION_RABBITMQ_DLQ_MAX_LENGTH_BYTES = int(
+    os.getenv(
+        "NOTIFICATION_RABBITMQ_DLQ_MAX_LENGTH_BYTES",
+        str(128 * 1024 * 1024),
+    )
+)
+
+NOTIFICATION_RABBITMQ_DLQ_MESSAGE_TTL_MS = int(
+    os.getenv(
+        "NOTIFICATION_RABBITMQ_DLQ_MESSAGE_TTL_MS",
+        str(14 * 24 * 60 * 60 * 1000),
+    )
+)
+
 # RabbitMQ
 OUTBOX_DISPATCH_MODE = os.getenv(
     "OUTBOX_DISPATCH_MODE",

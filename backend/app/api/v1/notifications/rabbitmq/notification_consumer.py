@@ -62,6 +62,50 @@ class NotificationRabbitMQConsumer:
             )
         )
 
+        self.queue_max_length = int(
+            getattr(
+                settings,
+                "NOTIFICATION_RABBITMQ_QUEUE_MAX_LENGTH",
+                50_000,
+            )
+        )
+        self.queue_max_length_bytes = int(
+            getattr(
+                settings,
+                "NOTIFICATION_RABBITMQ_QUEUE_MAX_LENGTH_BYTES",
+                256 * 1024 * 1024,
+            )
+        )
+        self.message_ttl_ms = int(
+            getattr(
+                settings,
+                "NOTIFICATION_RABBITMQ_MESSAGE_TTL_MS",
+                7 * 24 * 60 * 60 * 1000,
+            )
+        )
+
+        self.dlq_max_length = int(
+            getattr(
+                settings,
+                "NOTIFICATION_RABBITMQ_DLQ_MAX_LENGTH",
+                10_000,
+            )
+        )
+        self.dlq_max_length_bytes = int(
+            getattr(
+                settings,
+                "NOTIFICATION_RABBITMQ_DLQ_MAX_LENGTH_BYTES",
+                128 * 1024 * 1024,
+            )
+        )
+        self.dlq_message_ttl_ms = int(
+            getattr(
+                settings,
+                "NOTIFICATION_RABBITMQ_DLQ_MESSAGE_TTL_MS",
+                14 * 24 * 60 * 60 * 1000,
+            )
+        )
+
         self.connection: pika.BlockingConnection | None = None
         self.channel: pika.adapters.blocking_connection.BlockingChannel | None = None
         self.should_stop = False
@@ -179,6 +223,12 @@ class NotificationRabbitMQConsumer:
         self.channel.queue_declare(
             queue=self.dead_letter_queue_name,
             durable=True,
+            arguments={
+                "x-max-length": self.dlq_max_length,
+                "x-max-length-bytes": self.dlq_max_length_bytes,
+                "x-message-ttl": self.dlq_message_ttl_ms,
+                "x-overflow": "drop-head",
+            },
         )
 
         self.channel.queue_bind(
@@ -192,6 +242,10 @@ class NotificationRabbitMQConsumer:
             durable=True,
             arguments={
                 "x-dead-letter-exchange": self.dead_letter_exchange_name,
+                "x-max-length": self.queue_max_length,
+                "x-max-length-bytes": self.queue_max_length_bytes,
+                "x-message-ttl": self.message_ttl_ms,
+                "x-overflow": "reject-publish",
             },
         )
 

@@ -38,6 +38,8 @@ class RabbitMQPublisher:
             durable=True,
         )
 
+        self._channel.confirm_delivery()
+
         logger.info(
             "rabbitmq publisher connected",
             extra={
@@ -73,7 +75,7 @@ class RabbitMQPublisher:
                         delivery_mode=2,
                         message_id=message_id,
                     ),
-                    mandatory=False,
+                    mandatory=True,
                 )
 
                 logger.info(

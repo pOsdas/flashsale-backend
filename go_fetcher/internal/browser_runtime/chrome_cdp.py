@@ -153,6 +153,8 @@ class ChromeCDPConfiguration:
     runtime_dir: Path
     profile_root: Path
     profile_retention: int
+    profile_cache_cleanup_interval_hours: int
+    profile_max_total_mb: int
     runtime_log_retention: int
     disable_sandbox: bool
     disable_dev_shm_usage: bool
@@ -217,6 +219,16 @@ class ChromeCDPConfiguration:
                 "BROWSER_PROFILE_RETENTION",
                 20,
                 minimum=1,
+            ),
+            profile_cache_cleanup_interval_hours=_env_int(
+                "BROWSER_PROFILE_CACHE_CLEANUP_INTERVAL_HOURS",
+                24,
+                minimum=1,
+            ),
+            profile_max_total_mb=_env_int(
+                "BROWSER_PROFILE_MAX_TOTAL_MB",
+                1024,
+                minimum=64,
             ),
             runtime_log_retention=_env_int(
                 "BROWSER_RUNTIME_LOG_RETENTION",
@@ -318,6 +330,8 @@ class ChromeCDPSession:
         self.profile_dir.mkdir(parents=True, exist_ok=True)
         self._remove_stale_profile_locks(self.profile_dir)
         self._cleanup_old_profiles(exclude=self.profile_dir)
+        self._cleanup_profile_caches()
+        self._enforce_profile_size_limit(exclude=self.profile_dir)
 
         try:
             if not self.config.external_cdp_url:
@@ -636,6 +650,200 @@ class ChromeCDPSession:
                 shutil.rmtree(directory)
             except OSError:
                 pass
+
+    _CACHE_DIRECTORY_NAMES = {
+        "Cache",
+        "Code Cache",
+        "GPUCache",
+        "GrShaderCache",
+        "ShaderCache",
+        "DawnCache",
+        "GraphiteDawnCache",
+        "BrowserMetrics",
+        "Crashpad",
+        "component_crx_cache",
+        "optimization_guide_model_store",
+    }
+    _CACHE_CLEANUP_MARKER = ".flashsale-cache-cleanup"
+
+    @staticmethod
+    def _directory_size_bytes(directory: Path) -> int:
+        total = 0
+
+        try:
+            for path in directory.rglob("*"):
+                try:
+                    if path.is_file() and not path.is_symlink():
+                        total += path.stat().st_size
+                except OSError:
+                    continue
+        except OSError:
+            return total
+
+        return total
+
+    @staticmethod
+    def _remove_path(path: Path) -> int:
+        try:
+            if not path.exists() and not path.is_symlink():
+                return 0
+
+            size_before = 0
+            if path.is_dir() and not path.is_symlink():
+                size_before = ChromeCDPSession._directory_size_bytes(path)
+                shutil.rmtree(path)
+            else:
+                try:
+                    size_before = path.stat().st_size
+                except OSError:
+                    size_before = 0
+                path.unlink()
+
+            return size_before
+        except OSError:
+            return 0
+
+    def _profile_cache_paths(self, profile_dir: Path) -> list[Path]:
+        candidates: list[Path] = []
+
+        for name in self._CACHE_DIRECTORY_NAMES:
+            candidates.append(profile_dir / name)
+
+        try:
+            children = list(profile_dir.iterdir())
+        except OSError:
+            return candidates
+
+        for child in children:
+            if not child.is_dir():
+                continue
+
+            if child.name == "Default" or child.name.startswith("Profile "):
+                for name in self._CACHE_DIRECTORY_NAMES:
+                    candidates.append(child / name)
+
+        unique_paths: list[Path] = []
+        seen: set[str] = set()
+
+        for path in candidates:
+            key = str(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique_paths.append(path)
+
+        return unique_paths
+
+    def _cleanup_profile_caches(self) -> None:
+        max_total_bytes = self.config.profile_max_total_mb * 1024 * 1024
+        current_total = self._directory_size_bytes(self.config.profile_root)
+        force_cleanup = current_total > max_total_bytes
+
+        try:
+            profile_directories = [
+                path
+                for path in self.config.profile_root.iterdir()
+                if path.is_dir()
+            ]
+        except OSError:
+            return
+
+        now = time.time()
+        interval_seconds = (
+            self.config.profile_cache_cleanup_interval_hours * 60 * 60
+        )
+
+        for profile_dir in profile_directories:
+            marker_path = profile_dir / self._CACHE_CLEANUP_MARKER
+            due = force_cleanup
+
+            if not due:
+                try:
+                    due = (
+                        not marker_path.exists()
+                        or now - marker_path.stat().st_mtime >= interval_seconds
+                    )
+                except OSError:
+                    due = True
+
+            if not due:
+                continue
+
+            size_before = self._directory_size_bytes(profile_dir)
+            removed_bytes = 0
+
+            for cache_path in self._profile_cache_paths(profile_dir):
+                removed_bytes += self._remove_path(cache_path)
+
+            try:
+                marker_path.touch(exist_ok=True)
+            except OSError:
+                pass
+
+            size_after = self._directory_size_bytes(profile_dir)
+            actual_removed = max(0, size_before - size_after)
+
+            if actual_removed > 0 or removed_bytes > 0:
+                print(
+                    "Chrome profile cache cleaned: "
+                    f"marketplace={self.config.marketplace}, "
+                    f"profile={profile_dir.name}, "
+                    f"removed_mb={actual_removed / 1024 / 1024:.2f}, "
+                    f"size_after_mb={size_after / 1024 / 1024:.2f}",
+                    flush=True,
+                )
+
+    def _enforce_profile_size_limit(self, *, exclude: Path) -> None:
+        max_total_bytes = self.config.profile_max_total_mb * 1024 * 1024
+        total_bytes = self._directory_size_bytes(self.config.profile_root)
+
+        if total_bytes <= max_total_bytes:
+            return
+
+        try:
+            directories = [
+                path
+                for path in self.config.profile_root.iterdir()
+                if path.is_dir() and path != exclude
+            ]
+        except OSError:
+            return
+
+        directories.sort(
+            key=lambda path: path.stat().st_mtime_ns,
+        )
+
+        for directory in directories:
+            if total_bytes <= max_total_bytes:
+                break
+
+            directory_size = self._directory_size_bytes(directory)
+
+            try:
+                shutil.rmtree(directory)
+            except OSError:
+                continue
+
+            total_bytes = max(0, total_bytes - directory_size)
+            print(
+                "Old Chrome profile removed to enforce size limit: "
+                f"marketplace={self.config.marketplace}, "
+                f"profile={directory.name}, "
+                f"removed_mb={directory_size / 1024 / 1024:.2f}, "
+                f"remaining_mb={total_bytes / 1024 / 1024:.2f}, "
+                f"limit_mb={self.config.profile_max_total_mb}",
+                flush=True,
+            )
+
+        if total_bytes > max_total_bytes:
+            print(
+                "Chrome profile size limit could not be fully enforced: "
+                f"marketplace={self.config.marketplace}, "
+                f"active_profile={exclude.name}, "
+                f"current_mb={total_bytes / 1024 / 1024:.2f}, "
+                f"limit_mb={self.config.profile_max_total_mb}",
+                flush=True,
+            )
 
     def _cleanup_old_runtime_logs(self) -> None:
         log_files = [
