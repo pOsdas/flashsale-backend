@@ -2113,7 +2113,7 @@ groups:
   folder: Flashsale
   interval: 30s
   rules:
-  - uid: flashsale_vpn_ip_group_suspected_rejection
+  - uid: flashsale_vpn_group_suspected
     title: VPN IP Group Requires Manual Marketplace Check
     condition: C
     data:
