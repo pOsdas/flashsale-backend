@@ -3,13 +3,24 @@ services:
     image: postgres:17-alpine
     container_name: flashsale_db
     environment:
-      POSTGRES_DB: flashsale
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: pwd
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
+      POSTGRES_APP_USER: ${POSTGRES_APP_USER}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD}
+
+      POSTGRES_EXPORTER_USER: ${POSTGRES_EXPORTER_USER}
+      POSTGRES_EXPORTER_PASSWORD: ${POSTGRES_EXPORTER_PASSWORD}
     volumes:
       - flashsale_postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U user -d flashsale"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}",
+        ]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -20,7 +31,8 @@ services:
     command:
       - --collector.stat_checkpointer
     environment:
-      DATA_SOURCE_NAME: "postgresql://user:pwd@postgres:5432/flashsale?sslmode=disable"
+      DATA_SOURCE_NAME: >-
+        postgresql://${POSTGRES_EXPORTER_USER}:${POSTGRES_EXPORTER_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
     depends_on:
       postgres:
         condition: service_healthy
@@ -49,6 +61,62 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  vpn_controller:
+    build:
+      context: ./go_fetcher/internal
+      dockerfile: vpn_controller/Dockerfile
+    container_name: flashsale_vpn_controller
+    init: true
+    environment:
+      VPN_SUBSCRIPTIONS_PATH: /app/secrets/subscriptions.json
+      VPN_PROFILES_PATH: /app/vpn_controller/vpn_profiles.json
+      VPN_STATE_PATH: /app/state/latest-preflight.json
+      VPN_RUNS_DIR: /app/state/runs
+      VPN_PREFLIGHT_INTERVAL_SECONDS: "3600"
+      VPN_PARSE_DELAY_SECONDS: "0"  # prod = 600
+      VPN_PREFLIGHT_ATTEMPTS: "3"
+      VPN_PREFLIGHT_MIN_SUCCESSES: "2"
+      VPN_PREFLIGHT_PARALLELISM: "2"
+      VPN_XRAY_START_TIMEOUT_SECONDS: "20"
+      VPN_PROBE_TIMEOUT_SECONDS: "10"
+      VPN_MAX_PROFILES_PER_GROUP: "3"
+      VPN_RETAINED_RUNS: "5"
+      VPN_RUN_PREFLIGHT_ON_START: "true"
+      VPN_GATEWAY_ENABLED: "true"
+      VPN_REQUIRE_PARSE_READY: "true"
+      VPN_PARSE_PROXY_PORT: "10808"
+      VPN_PARSE_PROXY_PUBLIC_HOST: vpn_controller
+      VPN_PARSE_WORKER_TIMEOUT_SECONDS: "120"
+      VPN_PARSE_ATTEMPT_TIMEOUT_SECONDS: "150"
+      VPN_ACTIVE_SESSION_IDLE_SECONDS: "1200"
+      VPN_MARKETPLACE_REJECTION_CONFIRMATIONS: "2"
+      VPN_OZON_BROWSER_URL: http://ozon_browser_fetcher:8095
+      VPN_WB_BROWSER_URL: http://wb_browser_fetcher:8096
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./go_fetcher/secrets:/app/secrets:ro
+      - flashsale_vpn_controller_state:/app/state
+    expose:
+      - "8097"
+      - "10808"
+    depends_on:
+      wb_browser_fetcher:
+        condition: service_healthy
+      ozon_browser_fetcher:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8097/api/v1/health', timeout=5)\"",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    stop_grace_period: 30s
+
   go_fetcher:
     build:
       context: ./go_fetcher
@@ -56,15 +124,16 @@ services:
     container_name: flashsale_go_fetcher
     env_file:
       - ./go_fetcher/.env
+    environment:
+      WB_BROWSER_FETCHER_URL: http://vpn_controller:8097
+      OZON_BROWSER_FETCHER_URL: http://vpn_controller:8097
     volumes:
       - ./go_fetcher/secrets:/app/secrets:ro
     command: ["serve"]
     ports:
       - "127.0.0.1:8090:8090"
     depends_on:
-      wb_browser_fetcher:
-        condition: service_healthy
-      ozon_browser_fetcher:
+      vpn_controller:
         condition: service_healthy
     restart: unless-stopped
 
@@ -76,13 +145,19 @@ services:
     container_name: flashsale_ozon_browser_fetcher
     environment:
       OZON_COOKIE_PATH: /app/secrets/ozon_cookie.txt
-      OZON_BROWSER_CHALLENGE_TIMEOUT_MS: 25000
-      BROWSER_CDP_HOST: 127.0.0.1
-      BROWSER_CDP_PORT: 9222
-      BROWSER_PROFILE_DIR: /data/browser-profile
-      BROWSER_WINDOW_SIZE: 1400,900
-      BROWSER_LANGUAGE: ru-RU
-      BROWSER_DISABLE_SANDBOX: "true"
+
+      BROWSER_PROFILE_RETENTION: "20"
+      BROWSER_PROFILE_CACHE_CLEANUP_INTERVAL_HOURS: "24"
+      BROWSER_PROFILE_MAX_TOTAL_MB: "1024"
+      BROWSER_REQUIRE_PROXY: "true"
+      BROWSER_HEADLESS: "false"
+      BROWSER_START_TIMEOUT_SECONDS: "30"
+      OZON_BROWSER_CDP_START_TIMEOUT_SECONDS: "25"
+      OZON_BROWSER_CDP_CONNECT_TIMEOUT_MS: "10000"
+      OZON_BROWSER_DIAGNOSTICS_DIR: "/tmp/ozon-parser-diagnostics"
+      OZON_BROWSER_DIAGNOSTICS_MAX_SETS: "10"
+      OZON_BROWSER_DIAGNOSTICS_MAX_AGE_HOURS: "72"
+      OZON_BROWSER_DIAGNOSTICS_MAX_TOTAL_MB: "100"
       PYTHONUNBUFFERED: "1"
     volumes:
       - ozon_browser_profile:/data/browser-profile
@@ -106,12 +181,23 @@ services:
     container_name: flashsale_wb_browser_fetcher
     environment:
       WB_COOKIE_PATH: /app/secrets/wb_cookie.txt
-      BROWSER_CDP_HOST: 127.0.0.1
-      BROWSER_CDP_PORT: 9222
-      BROWSER_PROFILE_DIR: /data/browser-profile
-      BROWSER_WINDOW_SIZE: 1400,900
-      BROWSER_LANGUAGE: ru-RU
-      BROWSER_DISABLE_SANDBOX: "true"
+
+      BROWSER_PROFILE_RETENTION: "20"
+      BROWSER_PROFILE_CACHE_CLEANUP_INTERVAL_HOURS: "24"
+      BROWSER_PROFILE_MAX_TOTAL_MB: "1024"
+      BROWSER_REQUIRE_PROXY: "true"
+      BROWSER_HEADLESS: "false"
+      BROWSER_START_TIMEOUT_SECONDS: "30"
+      WB_BROWSER_CDP_START_TIMEOUT_SECONDS: "25"
+      WB_BROWSER_CDP_CONNECT_TIMEOUT_MS: "10000"
+      WB_BROWSER_READY_TIMEOUT_MS: "25000"
+      WB_BROWSER_READY_POLL_INTERVAL_MS: "500"
+      WB_BROWSER_POST_READY_DELAY_MS: "2000"
+      WB_BROWSER_RECOVERY_DELAY_MS: "6000"
+      WB_BROWSER_DIAGNOSTICS_DIR: "/tmp/wb-browser-diagnostics"
+      WB_BROWSER_DIAGNOSTICS_MAX_SETS: "10"
+      WB_BROWSER_DIAGNOSTICS_MAX_AGE_HOURS: "72"
+      WB_BROWSER_DIAGNOSTICS_MAX_TOTAL_MB: "100"
       PYTHONUNBUFFERED: "1"
     volumes:
       - wb_browser_profile:/data/browser-profile
@@ -334,3 +420,4 @@ volumes:
   flashsale_prometheus_data:
   ozon_browser_profile:
   wb_browser_profile:
+  flashsale_vpn_controller_state:
