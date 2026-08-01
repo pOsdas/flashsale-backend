@@ -10,6 +10,8 @@ services:
       LOAD_TESTING_API_KEY: ${LOAD_TESTING_API_KEY:-flashsale-local-load-key-change-me-123456789}
 
   go_fetcher:
+    environment:
+      FETCHER_API_KEY: ${FETCHER_API_KEY}
     volumes:
       - ./go_fetcher/secrets:/app/secrets:ro
       - ./load_testing/data:/load-data
@@ -25,6 +27,7 @@ services:
         --workers ${INTEGRATION_BACKEND_WORKERS:-2}
     environment:
       APP_ENV: docker
+      GO_FETCHER_API_KEY: ${FETCHER_API_KEY}
       LOAD_TESTING_ENABLED: "true"
       LOAD_TESTING_API_KEY: ${LOAD_TESTING_API_KEY:-flashsale-local-load-key-change-me-123456789}
     volumes:
@@ -40,6 +43,7 @@ services:
   monitoring_scanner:
     environment:
       APP_ENV: docker
+      GO_FETCHER_API_KEY: ${FETCHER_API_KEY}
       LOAD_TESTING_ENABLED: "true"
       LOAD_TESTING_API_KEY: ${LOAD_TESTING_API_KEY:-flashsale-local-load-key-change-me-123456789}
       MONITORING_SCANNER_BATCH_SIZE: ${INTEGRATION_SCANNER_BATCH_SIZE:-25}
