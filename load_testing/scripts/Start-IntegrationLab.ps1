@@ -31,9 +31,22 @@ if ($ResetData) {
 }
 
 $bootstrapServices = @(
-    "postgres", "redis", "rabbitmq", "load_simulator", "ozon_browser_fetcher", "go_fetcher",
-    "migrate", "backend", "postgres_exporter", "redis_exporter", "cadvisor",
-    "blackbox_exporter", "loki", "promtail"
+    "postgres",
+    "redis",
+    "rabbitmq",
+    "load_simulator",
+    "ozon_browser_fetcher",
+    "wb_browser_fetcher",
+    "vpn_controller",
+    "go_fetcher",
+    "migrate",
+    "backend",
+    "postgres_exporter",
+    "redis_exporter",
+    "cadvisor",
+    "blackbox_exporter",
+    "loki",
+    "promtail"
 )
 Invoke-DockerChecked `
     -Arguments ($compose + @("up", "-d", "--build") + $bootstrapServices) `
@@ -43,6 +56,56 @@ Wait-LoadLabHttp `
     -Url "http://127.0.0.1:8000/api/v1/prometheus/metrics" `
     -Name "backend"
 Wait-LoadLabHttp -Url "http://127.0.0.1:8090/health" -Name "Go fetcher"
+
+Write-Host "Waiting for VPN preflight to complete..." -ForegroundColor Cyan
+
+$vpnReady = $false
+$vpnWaitAttempts = 120
+$vpnWaitDelaySeconds = 5
+
+for ($attempt = 1; $attempt -le $vpnWaitAttempts; $attempt++) {
+    $vpnLogs = & docker @(
+        $compose + @(
+            "logs",
+            "--no-color",
+            "--since",
+            "15m",
+            "vpn_controller"
+        )
+    ) 2>&1
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not read vpn_controller logs."
+    }
+
+    $completedLine = $vpnLogs |
+        Select-String "VPN preflight cycle completed" |
+        Select-Object -Last 1
+
+    if ($completedLine) {
+        if ($completedLine.Line -match "available_profiles=(\d+)") {
+            $availableProfiles = [int]$Matches[1]
+
+            if ($availableProfiles -lt 1) {
+                throw "VPN preflight completed, but no available VPN profiles were found."
+            }
+        }
+
+        $vpnReady = $true
+        Write-Host "VPN preflight completed." -ForegroundColor Green
+        break
+    }
+
+    Write-Host `
+        "VPN preflight is still running ($attempt/$vpnWaitAttempts)..." `
+        -ForegroundColor DarkGray
+
+    Start-Sleep -Seconds $vpnWaitDelaySeconds
+}
+
+if (-not $vpnReady) {
+    throw "VPN preflight did not complete within $($vpnWaitAttempts * $vpnWaitDelaySeconds) seconds."
+}
 
 if (-not $SkipCatalogCollection) {
     Invoke-DockerChecked `
