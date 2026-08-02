@@ -7,7 +7,10 @@ from app.api.v1.monitoring.services.product_cache import (
     ProductCacheError,
     ProductCacheService,
 )
-from app.api.v1.monitoring.services.fetcher_client import MonitoringFetcherError
+from app.api.v1.monitoring.services.fetcher_client import (
+    MonitoringFetcherError,
+    MonitoringFetcherTemporarilyUnavailableError,
+)
 from app.core.logging import get_logger
 
 
@@ -71,6 +74,35 @@ class ProductPreviewService:
             )
             raise ProductPreviewBusyError(
                 "Товар уже обновляется. Попробуйте еще раз через несколько секунд."
+            ) from exc
+
+        except MonitoringFetcherTemporarilyUnavailableError as exc:
+            logger.warning(
+                "Product preview fetcher is temporarily unavailable",
+                extra={
+                    "service": "product_preview",
+                    "marketplace": marketplace,
+                    "url": url,
+                    "error": str(exc),
+                },
+            )
+            raise ProductPreviewBusyError(
+                "Сервис проверки товара временно занят. "
+                "Попробуйте еще раз через несколько секунд."
+            ) from exc
+
+        except MonitoringFetcherError as exc:
+            logger.warning(
+                "Product preview fetcher error",
+                extra={
+                    "service": "product_preview",
+                    "marketplace": marketplace,
+                    "url": url,
+                    "error": str(exc),
+                },
+            )
+            raise ProductPreviewError(
+                "Не удалось получить товар. Проверьте ссылку или попробуйте позже."
             ) from exc
 
         except MonitoringFetcherError as exc:

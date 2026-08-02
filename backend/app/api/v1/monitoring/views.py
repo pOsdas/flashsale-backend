@@ -826,8 +826,8 @@ class ProductPreviewView(APIView):
                 message=str(exc),
                 status_code=status.HTTP_409_CONFLICT,
                 details={
-                    "marketplace": marketplace,
-                    "url": url,
+                    "marketplace": serializer.validated_data["marketplace"],
+                    "url": serializer.validated_data["url"],
                 },
             ) from exc
 
@@ -837,8 +837,8 @@ class ProductPreviewView(APIView):
                 message=str(exc),
                 status_code=status.HTTP_400_BAD_REQUEST,
                 details={
-                    "marketplace": marketplace,
-                    "url": url,
+                    "marketplace": serializer.validated_data["marketplace"],
+                    "url": serializer.validated_data["url"],
                 },
             ) from exc
 
