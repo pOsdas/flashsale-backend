@@ -119,10 +119,6 @@ def readiness():
                 1,
                 math.ceil((parse_ready_at - now).total_seconds()),
             )
-        elif active_parse_session:
-            ready = False
-            reason = "active_parse_session"
-            retry_after_seconds = 5
 
     payload = {
         "ready": ready,
