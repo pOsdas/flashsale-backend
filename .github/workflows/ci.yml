@@ -37,7 +37,13 @@ jobs:
           POSTGRES_PASSWORD=pwd
           POSTGRES_HOST=postgres
           POSTGRES_PORT=5432
-
+          
+          POSTGRES_APP_USER=user
+          POSTGRES_APP_PASSWORD=pwd
+          
+          POSTGRES_EXPORTER_USER=exporter
+          POSTGRES_EXPORTER_PASSWORD=exporter-password
+          
           DATABASE_URL=postgresql://user:pwd@postgres:5432/flashsale
 
           DEBUG=True
@@ -75,6 +81,9 @@ jobs:
           NOTIFICATION_RABBITMQ_ROUTING_KEYS=alert.created
 
           OUTBOX_DISPATCH_MODE=rabbitmq
+
+          RABBITMQ_DEFAULT_USER=guest
+          RABBITMQ_DEFAULT_PASS=guest
           RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
           RABBITMQ_EXCHANGE=flashsale.events
 
@@ -152,8 +161,71 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Prepare backend CI environment
+        run: |
+          cat > backend/.env.docker << 'EOF'
+          ENV=dev
+
+          POSTGRES_DB=flashsale
+          POSTGRES_USER=user
+          POSTGRES_PASSWORD=pwd
+          POSTGRES_HOST=postgres
+          POSTGRES_PORT=5432
+
+          POSTGRES_APP_USER=user
+          POSTGRES_APP_PASSWORD=pwd
+          POSTGRES_EXPORTER_USER=exporter
+          POSTGRES_EXPORTER_PASSWORD=exporter-password
+
+          DATABASE_URL=postgresql://user:pwd@postgres:5432/flashsale
+
+          DEBUG=True
+          ENABLE_HTTPS_REDIRECT=False
+          SECRET_KEY=ci-secret-key
+          ALLOWED_HOSTS=["0.0.0.0","127.0.0.1","localhost","backend"]
+          ALLOW_DB_CREATE=1
+          DJANGO_SETTINGS_MODULE=app_project.settings
+          OUTBOX_METRICS_PORT=9100
+          LOG_FORMAT=json
+
+          GRAFANA_TELEGRAM_BOT_TOKEN=ci-telegram-bot-token
+          GRAFANA_TELEGRAM_CHAT_ID=ci-chat-id
+
+          MONITORING_FETCHER_MODE=http
+          GO_FETCHER_BASE_URL=http://go_fetcher:8090
+          GO_FETCHER_PARSER_HEALTH_ENDPOINT=/api/v1/parser/health/
+          GO_FETCHER_PRODUCT_ENDPOINT=/api/v1/fetch/product/
+          GO_FETCHER_API_KEY=test-fetcher-key
+          GO_FETCHER_TIMEOUT_SECONDS=20
+
+          NOTIF_TELEGRAM_BOT_TOKEN=ci-telegram-bot-token
+          NOTIF_TELEGRAM_BOT_USERNAME=ci_bot
+          NOTIF_TELEGRAM_CONNECT_TOKEN_MAX_AGE_SECONDS=900
+          NOTIF_TELEGRAM_CONNECT_SIGNING_SALT=flashsale-notif-tg-connect-ci-secret-value
+          NOTIF_TELEGRAM_REPLY_RATE_LIMIT_LIMIT=5
+          NOTIF_TELEGRAM_REPLY_RATE_LIMIT_WINDOW_SECONDS=60
+          NOTIF_TELEGRAM_DROP_PENDING_UPDATES_ON_START=False
+
+          NOTIFICATION_CONSUMER_METRICS_PORT=8011
+          NOTIFICATION_RABBITMQ_QUEUE=flashsale.notifications
+          NOTIFICATION_RABBITMQ_DLQ=flashsale.notifications.dlq
+          NOTIFICATION_RABBITMQ_DLX=flashsale.notifications.dlx
+          NOTIFICATION_RABBITMQ_PREFETCH_COUNT=10
+          NOTIFICATION_RABBITMQ_ROUTING_KEYS=alert.created
+
+          OUTBOX_DISPATCH_MODE=rabbitmq
+          RABBITMQ_DEFAULT_USER=guest
+          RABBITMQ_DEFAULT_PASS=guest
+          RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+          RABBITMQ_EXCHANGE=flashsale.events
+
+          REDIS_URL=redis://redis:6379/0
+          CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+          CELERY_RESULT_BACKEND=redis://redis:6379/1
+          EOF
+
       - name: Build backend Docker image
-        run: docker build -t flashsale-backend-ci ./backend
+        run: docker compose build backend
 
       - name: Run Django system check
-        run: docker compose run --rm backend python manage.py check
+        run: docker compose run --rm --no-deps backend python manage.py check
