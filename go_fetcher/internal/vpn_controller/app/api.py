@@ -1,3 +1,5 @@
+import math
+from datetime import datetime, timezone
 
 from flask import Blueprint, Response, jsonify, request
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
@@ -66,6 +68,93 @@ def health():
             "parse_runtime": orchestrator.runtime_snapshot(),
         }
     ), 200
+
+
+@bp.get("/api/v1/readiness")
+def readiness():
+    state, _, orchestrator = require_components()
+    snapshot = state.snapshot()
+    runtime = orchestrator.runtime_snapshot()
+    scheduler_alive = bool(_scheduler and _scheduler.is_alive())
+    plan = snapshot["plan"]
+    preflight_running = bool(snapshot["preflight_running"])
+    active_parse_session = bool(
+        runtime.get("active_session", {}).get("running")
+    )
+    available_profiles = (
+        int(plan.get("available_profiles_count", 0))
+        if plan is not None
+        else 0
+    )
+
+    ready = True
+    reason = "ready"
+    retry_after_seconds = None
+
+    if not scheduler_alive:
+        ready = False
+        reason = "scheduler_not_running"
+        retry_after_seconds = 30
+    elif preflight_running:
+        ready = False
+        reason = "preflight_running"
+        retry_after_seconds = 30
+    elif plan is None:
+        ready = False
+        reason = "preflight_plan_not_ready"
+        retry_after_seconds = 60
+    elif available_profiles < 1:
+        ready = False
+        reason = "no_available_profiles"
+        retry_after_seconds = 300
+    else:
+        parse_ready_at = datetime.fromisoformat(
+            plan["parse_ready_at"].replace("Z", "+00:00")
+        )
+        now = datetime.now(timezone.utc)
+        if now < parse_ready_at:
+            ready = False
+            reason = "parse_window_not_ready"
+            retry_after_seconds = max(
+                1,
+                math.ceil((parse_ready_at - now).total_seconds()),
+            )
+        elif active_parse_session:
+            ready = False
+            reason = "active_parse_session"
+            retry_after_seconds = 5
+
+    payload = {
+        "ready": ready,
+        "reason": reason,
+        "scheduler_alive": scheduler_alive,
+        "preflight_running": preflight_running,
+        "active_parse_session": active_parse_session,
+        "available_profiles": available_profiles,
+        "cycle_id": plan.get("cycle_id") if plan is not None else None,
+        "last_preflight_completed_at": (
+            plan.get("completed_at") if plan is not None else None
+        ),
+        "parse_ready_at": (
+            plan.get("parse_ready_at") if plan is not None else None
+        ),
+        "next_preflight_at": (
+            plan.get("next_preflight_at") if plan is not None else None
+        ),
+        "last_error": snapshot["last_error"] or None,
+        "scheduler_error": (
+            getattr(_scheduler, "last_error", "") or None
+            if _scheduler is not None
+            else "scheduler is not configured"
+        ),
+        "retry_after_seconds": retry_after_seconds,
+    }
+
+    response = jsonify(payload)
+    status_code = 200 if ready else 503
+    if retry_after_seconds is not None:
+        response.headers["Retry-After"] = str(retry_after_seconds)
+    return response, status_code
 
 
 @bp.get("/api/v1/preflight/latest")

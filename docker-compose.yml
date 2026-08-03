@@ -99,6 +99,8 @@ services:
     volumes:
       - ./go_fetcher/secrets:/app/secrets:ro
       - flashsale_vpn_controller_state:/app/state
+    ports:
+      - "127.0.0.1:8097:8097"
     expose:
       - "8097"
       - "10808"

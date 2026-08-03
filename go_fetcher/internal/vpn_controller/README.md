@@ -104,3 +104,20 @@ go_fetcher browser client: 420 seconds
 go_fetcher HTTP write timeout: 430 seconds
 Django go_fetcher client: 450 seconds
 ```
+
+## Readiness endpoint
+
+`GET /api/v1/readiness` reports whether the controller can accept a new
+integration parsing run.
+
+A `200` response means that:
+
+- the preflight scheduler is alive;
+- no preflight is running;
+- a preflight plan exists;
+- at least one VPN profile is available;
+- the parse delay has elapsed;
+- no parse session is active.
+
+When the controller is not ready, it returns `503`, a machine-readable
+`reason`, `retry_after_seconds`, and the matching `Retry-After` header.
