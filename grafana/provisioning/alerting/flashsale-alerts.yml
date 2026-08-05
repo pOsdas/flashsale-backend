@@ -32,8 +32,6 @@ groups:
             or absent(up{job="go_fetcher"})
             or (up{job="ozon_browser_fetcher"} == bool 0)
             or absent(up{job="ozon_browser_fetcher"})
-            or (up{job="wb_browser_fetcher"} == bool 0)
-            or absent(up{job="wb_browser_fetcher"})
             or (up{job="vpn_controller"} == bool 0)
             or absent(up{job="vpn_controller"})
             or (up{job="postgres"} == bool 0)
