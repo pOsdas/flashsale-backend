@@ -7,7 +7,18 @@ from django.conf import settings
 
 
 class TelegramApiError(RuntimeError):
-    """Telegram Bot API returned an invalid or unsuccessful response."""
+    """Telegram Bot API request failed."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        retry_after_seconds: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.retry_after_seconds = retry_after_seconds
 
 
 class TelegramBotClient:
@@ -251,13 +262,24 @@ class TelegramBotClient:
         path: str,
         params: Mapping[str, Any],
     ) -> Any:
-        response = self.client.get(
-            path,
-            params=dict(params),
-        )
+        method_name = path.lstrip("/")
+
+        try:
+            response = self.client.get(
+                path,
+                params=dict(params),
+            )
+        except httpx.HTTPError as exc:
+            raise TelegramApiError(
+                (
+                    f"Telegram {method_name} request failed: "
+                    f"{exc.__class__.__name__}"
+                )
+            ) from None
+
         return self._extract_result(
             response=response,
-            method_name=path.lstrip("/"),
+            method_name=method_name,
         )
 
     def _post(
@@ -266,13 +288,24 @@ class TelegramBotClient:
         path: str,
         payload: Mapping[str, Any],
     ) -> Any:
-        response = self.client.post(
-            path,
-            json=dict(payload),
-        )
+        method_name = path.lstrip("/")
+
+        try:
+            response = self.client.post(
+                path,
+                json=dict(payload),
+            )
+        except httpx.HTTPError as exc:
+            raise TelegramApiError(
+                (
+                    f"Telegram {method_name} request failed: "
+                    f"{exc.__class__.__name__}"
+                )
+            ) from None
+
         return self._extract_result(
             response=response,
-            method_name=path.lstrip("/"),
+            method_name=method_name,
         )
 
     def _extract_result(
@@ -281,27 +314,92 @@ class TelegramBotClient:
         response: httpx.Response,
         method_name: str,
     ) -> Any:
-        response.raise_for_status()
-
         try:
             data = response.json()
-        except ValueError as exc:
+        except ValueError:
+            data = None
+
+        retry_after_seconds = self._extract_retry_after_seconds(
+            data=data,
+        )
+
+        if response.is_error:
+            description = self._extract_error_description(
+                data=data,
+                fallback=f"HTTP {response.status_code}",
+            )
+
             raise TelegramApiError(
-                f"Telegram {method_name} returned invalid JSON"
-            ) from exc
+                f"Telegram {method_name} failed: {description}",
+                status_code=response.status_code,
+                retry_after_seconds=retry_after_seconds,
+            )
 
         if not isinstance(data, dict):
             raise TelegramApiError(
-                f"Telegram {method_name} response must be an object"
+                f"Telegram {method_name} response must be an object",
+                status_code=response.status_code,
             )
 
         if not data.get("ok"):
-            description = data.get("description") or data
+            description = self._extract_error_description(
+                data=data,
+                fallback="unsuccessful response",
+            )
+
             raise TelegramApiError(
-                f"Telegram {method_name} failed: {description}"
+                f"Telegram {method_name} failed: {description}",
+                status_code=response.status_code,
+                retry_after_seconds=retry_after_seconds,
             )
 
         return data.get("result")
+
+    @staticmethod
+    def _extract_retry_after_seconds(
+        *,
+        data: Any,
+    ) -> int | None:
+        if not isinstance(data, dict):
+            return None
+
+        parameters = data.get("parameters")
+
+        if not isinstance(parameters, dict):
+            return None
+
+        retry_after = parameters.get("retry_after")
+
+        if isinstance(retry_after, bool):
+            return None
+
+        try:
+            normalized_retry_after = int(retry_after)
+        except (TypeError, ValueError):
+            return None
+
+        if normalized_retry_after <= 0:
+            return None
+
+        return normalized_retry_after
+
+    @staticmethod
+    def _extract_error_description(
+        *,
+        data: Any,
+        fallback: str,
+    ) -> str:
+        if not isinstance(data, dict):
+            return fallback
+
+        description = data.get("description")
+
+        if not isinstance(description, str):
+            return fallback
+
+        normalized_description = description.strip()
+
+        return normalized_description or fallback
 
     def _ensure_object_result(
         self,

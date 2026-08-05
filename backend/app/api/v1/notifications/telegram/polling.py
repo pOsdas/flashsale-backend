@@ -1,10 +1,10 @@
 import signal
 import time
 from typing import Any
-
-import httpx
-
-from app.api.v1.notifications.telegram.client import TelegramBotClient
+from app.api.v1.notifications.telegram.client import (
+    TelegramApiError,
+    TelegramBotClient,
+)
 from app.api.v1.notifications.telegram.router import TelegramUpdateRouter
 from app.api.v1.notifications.telegram.telegram_metrics import (
     TELEGRAM_BOT_RUNNING,
@@ -29,7 +29,8 @@ class TelegramPollingRunner:
         client: TelegramBotClient,
         router: TelegramUpdateRouter,
         drop_pending_updates_on_start: bool,
-        error_sleep_seconds: int = 5,
+        error_sleep_seconds: int = 2,
+        max_error_sleep_seconds: int = 60,
     ) -> None:
         self.client = client
         self.router = router
@@ -37,11 +38,13 @@ class TelegramPollingRunner:
             drop_pending_updates_on_start
         )
         self.error_sleep_seconds = error_sleep_seconds
+        self.max_error_sleep_seconds = max_error_sleep_seconds
         self.should_stop = False
 
     def run(self) -> None:
         self._register_signal_handlers()
         offset: int | None = None
+        consecutive_errors = 0
 
         TELEGRAM_BOT_RUNNING.set(1)
 
@@ -74,24 +77,47 @@ class TelegramPollingRunner:
                         offset=offset,
                     )
 
-                except httpx.HTTPError as exc:
+                except TelegramApiError as exc:
+                    consecutive_errors += 1
+
+                    if exc.status_code == 429:
+                        request_status = "rate_limited"
+                    else:
+                        request_status = "http_error"
+
                     TELEGRAM_POLLING_REQUESTS_TOTAL.labels(
-                        status="http_error",
+                        status=request_status,
                     ).inc()
                     TELEGRAM_HANDLER_ERRORS_TOTAL.labels(
                         stage="polling_http",
                     ).inc()
 
-                    logger.exception(
-                        "Telegram bot HTTP error",
+                    sleep_seconds = self._get_error_sleep_seconds(
+                        consecutive_errors=consecutive_errors,
+                        retry_after_seconds=exc.retry_after_seconds,
+                    )
+
+                    logger.warning(
+                        "Telegram bot polling request failed",
                         extra={
                             "service": "telegram_bot",
+                            "status_code": exc.status_code,
+                            "retry_after_seconds": (
+                                exc.retry_after_seconds
+                            ),
+                            "sleep_seconds": sleep_seconds,
+                            "consecutive_errors": consecutive_errors,
                             "error": str(exc),
                         },
                     )
-                    time.sleep(self.error_sleep_seconds)
+
+                    self._sleep_interruptibly(
+                        seconds=sleep_seconds,
+                    )
 
                 except Exception as exc:
+                    consecutive_errors += 1
+
                     TELEGRAM_POLLING_REQUESTS_TOTAL.labels(
                         status="error",
                     ).inc()
@@ -99,16 +125,27 @@ class TelegramPollingRunner:
                         stage="polling",
                     ).inc()
 
+                    sleep_seconds = self._get_error_sleep_seconds(
+                        consecutive_errors=consecutive_errors,
+                    )
+
                     logger.exception(
                         "Telegram bot polling error",
                         extra={
                             "service": "telegram_bot",
+                            "sleep_seconds": sleep_seconds,
+                            "consecutive_errors": consecutive_errors,
                             "error": str(exc),
                         },
                     )
-                    time.sleep(self.error_sleep_seconds)
+
+                    self._sleep_interruptibly(
+                        seconds=sleep_seconds,
+                    )
 
                 else:
+                    consecutive_errors = 0
+
                     TELEGRAM_POLLING_REQUESTS_TOTAL.labels(
                         status="success",
                     ).inc()
@@ -210,6 +247,49 @@ class TelegramPollingRunner:
                 offset = next_offset
 
         return offset
+
+    def _get_error_sleep_seconds(
+        self,
+        *,
+        consecutive_errors: int,
+        retry_after_seconds: int | None = None,
+    ) -> int:
+        exponential_delay = min(
+            self.error_sleep_seconds
+            * (2 ** max(consecutive_errors - 1, 0)),
+            self.max_error_sleep_seconds,
+        )
+
+        if retry_after_seconds is None:
+            return exponential_delay
+
+        return min(
+            max(
+                retry_after_seconds,
+                exponential_delay,
+            ),
+            self.max_error_sleep_seconds,
+        )
+
+    def _sleep_interruptibly(
+        self,
+        *,
+        seconds: int,
+    ) -> None:
+        sleep_until = time.monotonic() + seconds
+
+        while not self.should_stop:
+            remaining_seconds = sleep_until - time.monotonic()
+
+            if remaining_seconds <= 0:
+                return
+
+            time.sleep(
+                min(
+                    remaining_seconds,
+                    1,
+                )
+            )
 
     def _register_signal_handlers(self) -> None:
         signal.signal(
