@@ -29,11 +29,7 @@ class NotificationRabbitMQConsumer:
 
     def __init__(self) -> None:
         self.rabbitmq_url = settings.RABBITMQ_URL
-        self.exchange_name = getattr(
-            settings,
-            "RABBITMQ_OUTBOX_EXCHANGE",
-            "flashsale.outbox",
-        )
+        self.exchange_name = settings.RABBITMQ_EXCHANGE
         self.queue_name = getattr(
             settings,
             "NOTIFICATION_RABBITMQ_QUEUE",
