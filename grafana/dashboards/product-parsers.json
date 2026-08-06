@@ -3,7 +3,7 @@
   "title": "Product Parsers",
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 2,
+  "version": 3,
   "refresh": "15s",
   "tags": [
     "flashsale",
@@ -1228,7 +1228,7 @@
       "title": "Recent Go Fetcher Logs",
       "gridPos": {
         "x": 0,
-        "y": 52,
+        "y": 60,
         "w": 12,
         "h": 10
       },
@@ -1260,7 +1260,7 @@
       "title": "Recent Ozon Browser Logs",
       "gridPos": {
         "x": 12,
-        "y": 52,
+        "y": 60,
         "w": 12,
         "h": 10
       },
@@ -1284,6 +1284,176 @@
         "enableLogDetails": true,
         "sortOrder": "Descending",
         "dedupStrategy": "none"
+      }
+    },
+    {
+      "id": 23,
+      "type": "barchart",
+      "title": "Ozon Successful Parses by VPN Profile",
+      "gridPos": {
+        "x": 0,
+        "y": 52,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum by(profile) (increase(vpn_parse_attempts_total{marketplace=\"ozon\",result=\"success\"}[$__range]))",
+          "refId": "A",
+          "legendFormat": "{{profile}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No successful attempts"
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "auto",
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "showValue": "always",
+        "stacking": "none",
+        "groupWidth": 0.7,
+        "barWidth": 0.8,
+        "barRadius": 0,
+        "fullHighlight": false,
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
+      }
+    },
+    {
+      "id": 24,
+      "type": "bargauge",
+      "title": "Ozon VPN Profile Success Rate",
+      "gridPos": {
+        "x": 8,
+        "y": 52,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "targets": [
+        {
+          "expr": "100 * sum by(profile) (increase(vpn_parse_attempts_total{marketplace=\"ozon\",result=\"success\"}[$__range])) / clamp_min(sum by(profile) (increase(vpn_parse_attempts_total{marketplace=\"ozon\"}[$__range])), 1)",
+          "refId": "A",
+          "legendFormat": "{{profile}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "min": 0,
+          "max": 100,
+          "noValue": "No attempts",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 50
+              },
+              {
+                "color": "green",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 8,
+        "minVizHeight": 16,
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "valueMode": "color"
+      }
+    },
+    {
+      "id": 25,
+      "type": "barchart",
+      "title": "Ozon Attempts by VPN Profile and Result",
+      "gridPos": {
+        "x": 16,
+        "y": 52,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum by(profile, result) (increase(vpn_parse_attempts_total{marketplace=\"ozon\"}[$__range]))",
+          "refId": "A",
+          "legendFormat": "{{profile}} / {{result}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No attempts"
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "auto",
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "showValue": "auto",
+        "stacking": "normal",
+        "groupWidth": 0.7,
+        "barWidth": 0.8,
+        "barRadius": 0,
+        "fullHighlight": false,
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
       }
     }
   ]
