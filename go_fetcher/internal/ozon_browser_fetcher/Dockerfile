@@ -44,4 +44,4 @@ RUN mkdir -p /tmp/browser-runtime /data/browser-profile /tmp/.X11-unix \
 
 EXPOSE 8095
 
-CMD ["gunicorn", "--bind", "0.0.0.0:8095", "--workers", "1", "--threads", "1", "--timeout", "120", "ozon_browser_fetcher.manage:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8095", "--workers", "1", "--threads", "8", "--timeout", "240", "ozon_browser_fetcher.manage:app"]

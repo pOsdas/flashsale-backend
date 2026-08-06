@@ -47,6 +47,7 @@ class BrowserWorker:
         self.stop_event = threading.Event()
 
         self.thread: Optional[threading.Thread] = None
+        self.heartbeat_thread: Optional[threading.Thread] = None
         self.startup_error: Optional[str] = None
 
         self.diagnostics_dir = Path(
@@ -83,6 +84,13 @@ class BrowserWorker:
         )
         self.thread.start()
 
+        self.heartbeat_thread = threading.Thread(
+            target=self._run_heartbeat,
+            name="ozon-browser-heartbeat",
+            daemon=True,
+        )
+        self.heartbeat_thread.start()
+
         is_ready = self.ready_event.wait(timeout=90)
 
         if not is_ready:
@@ -117,6 +125,18 @@ class BrowserWorker:
             OZON_BROWSER_WORKER_READY.set(0)
             self.manager.stop()
             self._update_queue_size()
+
+    def _run_heartbeat(self) -> None:
+        while not self.stop_event.wait(timeout=10):
+            thread_alive = bool(
+                self.thread is not None
+                and self.thread.is_alive()
+            )
+
+            if not thread_alive:
+                return
+
+            observe_worker_heartbeat()
 
     def _execute_task(self, task: Dict[str, Any]) -> None:
         task_type = normalize_task_type(task.get("type"))
@@ -536,6 +556,12 @@ class BrowserWorker:
             and self.thread.is_alive()
         ):
             self.thread.join(timeout=10)
+
+        if (
+            self.heartbeat_thread is not None
+            and self.heartbeat_thread.is_alive()
+        ):
+            self.heartbeat_thread.join(timeout=2)
 
     @staticmethod
     def _env_int(
