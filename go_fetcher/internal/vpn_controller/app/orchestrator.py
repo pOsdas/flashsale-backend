@@ -580,84 +580,122 @@ class VPNParseOrchestrator:
 
     @staticmethod
     def _classify_worker_response(
-        *,
-        marketplace: str,
-        response: WorkerResponse,
+            *,
+            marketplace: str,
+            response: WorkerResponse,
     ) -> tuple[ParseAttemptStatus, int]:
         effective_status_code = response.status_code
         text = response.text_preview(limit=5000)
+        payload = response.json_or_none()
 
         if marketplace == "wb" and 200 <= response.status_code < 300:
-            payload = response.json_or_none()
             if isinstance(payload, dict) and "status_code" in payload:
                 try:
-                    effective_status_code = int(payload.get("status_code") or 0)
+                    effective_status_code = int(
+                        payload.get("status_code") or 0
+                    )
                 except (TypeError, ValueError):
                     effective_status_code = 0
+
                 nested_body = payload.get("body")
+
                 if isinstance(nested_body, (dict, list)):
-                    text = json.dumps(nested_body, ensure_ascii=False)
+                    text = json.dumps(
+                        nested_body,
+                        ensure_ascii=False,
+                    )
                 elif nested_body is not None:
                     text = str(nested_body)
+
+                if isinstance(nested_body, dict):
+                    payload = nested_body
 
         if 200 <= effective_status_code < 300:
             return ParseAttemptStatus.SUCCESS, effective_status_code
 
         normalized_text = text.casefold()
+
+        response_status = ""
+        response_error_type = ""
+
+        if isinstance(payload, dict):
+            response_status = str(
+                payload.get("status") or ""
+            ).strip().casefold()
+            response_error_type = str(
+                payload.get("error_type") or ""
+            ).strip().casefold()
+
+        explicitly_rejected = bool(
+            effective_status_code in {403, 429, 451, 498}
+            or response_status == "marketplace_rejected"
+            or response_error_type == "antibot"
+            or any(
+                marker in normalized_text
+                for marker in (
+                    "antibot",
+                    "anti-bot",
+                    "captcha",
+                    "access denied",
+                    "forbidden",
+                    "blocked",
+                    "robot check",
+                    "challenge",
+                )
+            )
+        )
+
+        if explicitly_rejected:
+            return (
+                ParseAttemptStatus.MARKETPLACE_REJECTED,
+                effective_status_code,
+            )
+
         if effective_status_code == 504 or any(
-            marker in normalized_text
-            for marker in (
-                "timed out",
-                "timeout",
-                "err_timed_out",
-                "deadline exceeded",
-            )
+                marker in normalized_text
+                for marker in (
+                        "timed out",
+                        "timeout",
+                        "err_timed_out",
+                        "deadline exceeded",
+                )
         ):
-            return ParseAttemptStatus.MARKETPLACE_TIMEOUT, effective_status_code
-
-        if effective_status_code in {403, 429, 451, 498} or any(
-            marker in normalized_text
-            for marker in (
-                "antibot",
-                "anti-bot",
-                "captcha",
-                "access denied",
-                "forbidden",
-                "blocked",
-                "robot check",
-                "challenge",
+            return (
+                ParseAttemptStatus.MARKETPLACE_TIMEOUT,
+                effective_status_code,
             )
-        ):
-            return ParseAttemptStatus.MARKETPLACE_REJECTED, effective_status_code
 
         if any(
-            marker in normalized_text
-            for marker in (
-                "browser worker is not ready",
-                "worker unavailable",
-                "worker thread is not running",
-                "startup_error",
-                "google chrome stable executable was not found",
-                "google chrome stopped before cdp became ready",
-                "google chrome cdp endpoint did not become ready",
-                "chrome cdp connection did not expose",
-                "xvfb stopped before its display became ready",
-                "xvfb display",
-            )
+                marker in normalized_text
+                for marker in (
+                        "browser worker is not ready",
+                        "worker unavailable",
+                        "worker thread is not running",
+                        "startup_error",
+                        "google chrome stable executable was not found",
+                        "google chrome stopped before cdp became ready",
+                        "google chrome cdp endpoint did not become ready",
+                        "chrome cdp connection did not expose",
+                        "xvfb stopped before its display became ready",
+                        "xvfb display",
+                )
         ):
-            return ParseAttemptStatus.WORKER_UNAVAILABLE, effective_status_code
+            return (
+                ParseAttemptStatus.WORKER_UNAVAILABLE,
+                effective_status_code,
+            )
 
         if any(
-            marker in normalized_text
-            for marker in (
-                "err_connection_closed",
-                "err_connection_reset",
-                "connection closed",
-                "connection reset",
-                "proxy connection",
-                "tunnel connection",
-                "net::err_",
-            )
+                marker in normalized_text
+                for marker in (
+                        "err_connection_closed",
+                        "err_connection_reset",
+                        "connection closed",
+                        "connection reset",
+                        "proxy connection",
+                        "tunnel connection",
+                        "net::err_",
+                )
         ):
             return (
                 ParseAttemptStatus.MARKETPLACE_CONNECTION_ERROR,
@@ -671,19 +709,28 @@ class VPNParseOrchestrator:
             )
 
         if effective_status_code in {400, 401, 405, 409, 422}:
-            return ParseAttemptStatus.REQUEST_INVALID, effective_status_code
+            return (
+                ParseAttemptStatus.REQUEST_INVALID,
+                effective_status_code,
+            )
 
         if any(
-            marker in normalized_text
-            for marker in (
-                "invalid json",
-                "invalid response",
-                "decode",
-            )
+                marker in normalized_text
+                for marker in (
+                        "invalid json",
+                        "invalid response",
+                        "decode",
+                )
         ):
-            return ParseAttemptStatus.INVALID_RESPONSE, effective_status_code
+            return (
+                ParseAttemptStatus.INVALID_RESPONSE,
+                effective_status_code,
+            )
 
-        return ParseAttemptStatus.PARSER_ERROR, effective_status_code
+        return (
+            ParseAttemptStatus.PARSER_ERROR,
+            effective_status_code,
+        )
 
     def _observe_attempt(self, attempt: ParseAttemptResult) -> None:
         VPN_PARSE_ATTEMPTS_TOTAL.labels(
@@ -751,6 +798,12 @@ class VPNParseOrchestrator:
                 marketplace=marketplace,
                 exit_ip=exit_ip,
             ).set(1)
+        elif (
+            persistently_exhausted
+            and rejected_profiles
+            and len(rejected_profiles) == len(confirmed_attempts)
+        ):
+            reason = "marketplace_rejection_unconfirmed"
         elif persistently_exhausted and not confirmed_attempts:
             reason = "vpn_group_unavailable"
         elif persistently_exhausted:
