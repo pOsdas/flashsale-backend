@@ -102,11 +102,11 @@ class AlertNotificationBuilder:
 
         if alert_type == "rating_changed":
             value = getattr(snapshot, "rating", None)
-            return str(value) if value is not None else "—"
+            return cls._format_rating(value)
 
         if alert_type == "reviews_count_changed":
             value = getattr(snapshot, "reviews_count", None)
-            return str(value) if value is not None else "—"
+            return cls._format_reviews_count(value)
 
         return "—"
 
@@ -114,27 +114,157 @@ class AlertNotificationBuilder:
     def _format_value(cls, alert, value) -> str:
         alert_type = getattr(alert, "alert_type", "")
 
-        if alert_type in ("price_changed", "price_dropped", "price_increased"):
-            return cls._format_price(value)
+        if not isinstance(value, dict):
+            return cls._format_scalar_value(
+                alert_type=alert_type,
+                value=value,
+            )
 
-        if alert_type in ("became_available", "became_unavailable"):
-            if value in (True, "true", "True", 1, "1"):
-                return "В наличии"
-            return "Нет в наличии"
+        if alert_type in (
+                "price_changed",
+                "price_dropped",
+                "price_increased",
+        ):
+            return cls._format_price_change_value(value)
+
+        if alert_type in (
+                "became_available",
+                "became_unavailable",
+        ):
+            return cls._format_availability_value(
+                value.get("is_available"),
+            )
+
+        if alert_type == "title_changed":
+            return str(value.get("title") or "—")
+
+        if alert_type == "rating_changed":
+            return cls._format_rating(
+                value.get("rating"),
+            )
+
+        if alert_type == "reviews_count_changed":
+            return cls._format_reviews_count(
+                value.get("reviews_count"),
+            )
 
         return str(value)
 
     @classmethod
-    def _format_price(cls, value) -> str:
-        if value is None:
+    def _format_scalar_value(
+        cls,
+        *,
+        alert_type: str,
+        value,
+    ) -> str:
+        if alert_type in (
+            "price_changed",
+            "price_dropped",
+            "price_increased",
+        ):
+            return cls._format_price(value)
+
+        if alert_type in (
+            "became_available",
+            "became_unavailable",
+        ):
+            return cls._format_availability_value(value)
+
+        if alert_type == "rating_changed":
+            return cls._format_rating(value)
+
+        if alert_type == "reviews_count_changed":
+            return cls._format_reviews_count(value)
+
+        if value in (None, ""):
+            return "—"
+
+        return str(value)
+
+    @classmethod
+    def _format_price_change_value(
+        cls,
+        value: dict,
+    ) -> str:
+        price = cls._format_price(
+            value.get("price"),
+        )
+
+        percent_change = value.get("percent_change")
+
+        if percent_change in (None, ""):
+            return price
+
+        formatted_percent = cls._format_percent(
+            percent_change,
+        )
+
+        if not formatted_percent:
+            return price
+
+        return f"{price} ({formatted_percent})"
+
+    @staticmethod
+    def _format_availability_value(value) -> str:
+        if value in (True, "true", "True", 1, "1"):
+            return "В наличии"
+
+        if value in (False, "false", "False", 0, "0"):
+            return "Нет в наличии"
+
+        return "—"
+
+    @staticmethod
+    def _format_rating(value) -> str:
+        if value in (None, ""):
             return "—"
 
         try:
-            price = int(value)
+            rating = float(value)
         except (TypeError, ValueError):
             return str(value)
 
-        return f"{price:,}".replace(",", " ") + " ₽"
+        formatted = f"{rating:.2f}".rstrip("0").rstrip(".")
+        return formatted
+
+    @staticmethod
+    def _format_reviews_count(value) -> str:
+        if value in (None, ""):
+            return "—"
+
+        try:
+            return f"{int(value):,}".replace(",", " ")
+        except (TypeError, ValueError):
+            return str(value)
+
+    @staticmethod
+    def _format_percent(value) -> str:
+        try:
+            percent = float(value)
+        except (TypeError, ValueError):
+            return ""
+
+        sign = "+" if percent > 0 else ""
+        formatted = f"{percent:.2f}".rstrip("0").rstrip(".")
+
+        return f"{sign}{formatted}%"
+
+    @classmethod
+    def _format_price(cls, value) -> str:
+        if value in (None, ""):
+            return "—"
+
+        try:
+            price = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+
+        if price.is_integer():
+            formatted = f"{int(price):,}".replace(",", " ")
+        else:
+            formatted = f"{price:,.2f}".replace(",", " ")
+
+        return f"{formatted} ₽"
 
     @classmethod
     def _format_datetime(cls, value) -> str:

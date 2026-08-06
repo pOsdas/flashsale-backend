@@ -212,6 +212,19 @@ def _detect_rating_changes(
     if previous_rating is None or current_rating is None:
         return []
 
+    current_reviews_count = current_snapshot.reviews_count
+    previous_reviews_count = previous_snapshot.reviews_count
+
+    rating_disappeared_with_reviews = (
+        previous_rating > 0
+        and current_rating == 0
+        and previous_reviews_count not in (None, 0)
+        and current_reviews_count in (None, 0)
+    )
+
+    if rating_disappeared_with_reviews:
+        return []
+
     if previous_rating == current_rating:
         return []
 

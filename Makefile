@@ -1,5 +1,7 @@
 .PHONY: \
 	test \
+	test-backend \
+	test-wb \
 	ps \
 	health \
 	go-parser-health \
@@ -10,15 +12,21 @@
 	logs-outbox \
 	logs-notifications
 
-test:
+test: test-backend test-wb
+
+test-backend:
 	cd backend && python manage.py test \
 		app.api.v1.catalog.tests \
-        app.api.v1.common.tests \
+		app.api.v1.common.tests \
 		app.api.v1.notifications.tests \
-        app.api.v1.fetcher.tests \
+		app.api.v1.fetcher.tests \
 		app.api.v1.monitoring.tests \
 		app.api.v1.orders.tests \
 		app.api.v1.payments.tests
+
+test-wb:
+	cd go_fetcher/internal && python -m unittest \
+		wb_browser_fetcher.app.test_product_parsing
 
 ps:
 	docker compose ps

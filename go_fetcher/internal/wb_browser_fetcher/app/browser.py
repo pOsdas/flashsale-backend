@@ -212,10 +212,12 @@ class WBBrowser:
         *,
         stage: str,
         require_search_content: bool,
+        expected_nm_id: str = "",
     ) -> bool:
         if self.page is None or self.context is None:
             raise RuntimeError("WB browser page is not ready")
 
+        expected_nm_id = expected_nm_id.strip()
         deadline = time.monotonic() + (self.ready_timeout_ms / 1000)
         last_cookie_signature: tuple[str, ...] | None = None
         stable_cookie_checks = 0
@@ -230,23 +232,70 @@ class WBBrowser:
             try:
                 state = self.page.evaluate(
                     r"""
-                    () => {
+                    (expectedNmId) => {
                         const body = document.body;
                         const bodyText = body ? (body.innerText || '') : '';
+
                         const productLinks = document.querySelectorAll(
                             'a[href*="/catalog/"][href*="/detail.aspx"]'
                         ).length;
-                        const blocked = /403 forbidden|access denied|captcha|проверяем ваш браузер|что-то пошло не так/i.test(
-                            bodyText
+
+                        const blocked = (
+                            /403 forbidden|access denied|captcha|проверяем ваш браузер|что-то пошло не так/i
+                        ).test(bodyText);
+
+                        const currentUrl = window.location.href;
+                        const expectedProductPath = expectedNmId
+                            ? `/catalog/${expectedNmId}/detail.aspx`
+                            : '';
+
+                        const productUrlMatches = (
+                            !expectedNmId
+                            || currentUrl.includes(expectedProductPath)
                         );
+
+                        const heading = document.querySelector('h1');
+                        const headingText = heading
+                            ? (heading.textContent || '').trim()
+                            : '';
+
+                        const priceElements = [
+                            ...document.querySelectorAll('[class*="price"]')
+                        ];
+
+                        const hasPositivePrice = priceElements.some((element) => {
+                            const text = (
+                                element.textContent || ''
+                            ).replace(/\u00a0/g, ' ');
+
+                            const matches = [
+                                ...text.matchAll(/([\d\s]+)\s*₽/g)
+                            ];
+
+                            return matches.some((match) => {
+                                const value = Number(
+                                    match[1].replace(/\D/g, '')
+                                );
+
+                                return Number.isFinite(value) && value > 0;
+                            });
+                        });
+
+                        const hasProductHeading = headingText.length >= 3;
+
                         return {
                             body_length: bodyText.length,
                             product_links: productLinks,
                             blocked: blocked,
-                            ready_state: document.readyState
+                            ready_state: document.readyState,
+                            product_url_matches: productUrlMatches,
+                            product_heading: headingText,
+                            has_product_heading: hasProductHeading,
+                            has_positive_price: hasPositivePrice
                         };
                     }
-                    """
+                    """,
+                    expected_nm_id,
                 )
             except Exception:
                 state = {
@@ -254,6 +303,10 @@ class WBBrowser:
                     "product_links": 0,
                     "blocked": False,
                     "ready_state": "",
+                    "product_url_matches": False,
+                    "product_heading": "",
+                    "has_product_heading": False,
+                    "has_positive_price": False,
                 }
 
             cookie_names = tuple(self._cookie_names())
@@ -277,6 +330,14 @@ class WBBrowser:
                 not require_search_content
                 or int(state.get("product_links") or 0) > 0
             )
+            product_ready = (
+                not expected_nm_id
+                or (
+                    bool(state.get("product_url_matches"))
+                    and bool(state.get("has_product_heading"))
+                    and bool(state.get("has_positive_price"))
+                )
+            )
             cookies_stable = stable_cookie_checks >= 2
 
             last_state = {
@@ -288,9 +349,22 @@ class WBBrowser:
                 "ready_state": str(state.get("ready_state") or ""),
                 "cookies": list(cookie_names),
                 "cookies_stable": cookies_stable,
+                "expected_nm_id": expected_nm_id,
+                "product_url_matches": bool(
+                    state.get("product_url_matches")
+                ),
+                "product_heading": str(
+                    state.get("product_heading") or ""
+                ),
+                "has_product_heading": bool(
+                    state.get("has_product_heading")
+                ),
+                "has_positive_price": bool(
+                    state.get("has_positive_price")
+                ),
             }
 
-            if title_ready and body_ready and search_ready and cookies_stable:
+            if title_ready and body_ready and search_ready and product_ready and cookies_stable:
                 if self.post_ready_delay_ms > 0:
                     self.page.wait_for_timeout(self.post_ready_delay_ms)
                 print(
@@ -591,8 +665,13 @@ class WBBrowser:
             stage="request_page",
             require_search_content=(
                 "/search/" in urlparse(url).path
-                and bool(str((original_query.get("query") or [""])[0]).strip())
+                and bool(
+                    str(
+                        (original_query.get("query") or [""])[0]
+                    ).strip()
+                )
             ),
+            expected_nm_id=target_nm,
         )
         self.page.remove_listener("response", capture_response)
         title = self.page.title()
@@ -736,6 +815,98 @@ class WBBrowser:
             """
         )
 
+    @classmethod
+    def _extract_product_name(
+        cls,
+        *,
+        nm_id: str,
+        brand: str,
+        page_title: str,
+        headings: List[str],
+    ) -> str:
+        for heading in headings:
+            normalized_heading = cls._normalize_product_name(
+                value=heading,
+                nm_id=nm_id,
+                brand=brand,
+            )
+
+            if cls._is_valid_product_name(normalized_heading):
+                return normalized_heading
+
+        normalized_title = cls._normalize_product_name(
+            value=page_title,
+            nm_id=nm_id,
+            brand=brand,
+        )
+
+        if cls._is_valid_product_name(normalized_title):
+            return normalized_title
+
+        return ""
+
+    @staticmethod
+    def _normalize_product_name(
+        *,
+        value: str,
+        nm_id: str,
+        brand: str,
+    ) -> str:
+        normalized = " ".join(
+            str(value or "").split()
+        ).strip()
+
+        if not normalized:
+            return ""
+
+        suffix_patterns = [
+            rf"\s+{re.escape(nm_id)}\s+купить.*$",
+            rf"\s+арт[и.]?кул\s+{re.escape(nm_id)}.*$",
+            r"\s+[—|-]\s+купить\s+на\s+Wildberries.*$",
+        ]
+
+        if brand:
+            suffix_patterns.insert(
+                0,
+                (
+                    rf"\s+{re.escape(brand)}\s+"
+                    rf"{re.escape(nm_id)}\s+купить.*$"
+                ),
+            )
+
+        for pattern in suffix_patterns:
+            normalized = re.sub(
+                pattern,
+                "",
+                normalized,
+                flags=re.IGNORECASE,
+            ).strip()
+
+        return normalized
+
+    @staticmethod
+    def _is_valid_product_name(value: str) -> bool:
+        normalized = value.strip()
+        lowered = normalized.lower()
+
+        if len(normalized) < 3:
+            return False
+
+        generic_fragments = (
+            "интернет-магазин wildberries",
+            "широкий ассортимент товаров",
+            "скидки каждый день",
+            "купить интернет-магазин",
+            "wildberries — модный интернет-магазин",
+            "wildberries – модный интернет-магазин",
+            "wildberries - модный интернет-магазин",
+        )
+
+        return not any(
+            fragment in lowered
+            for fragment in generic_fragments
+        )
+
     def _extract_dom_product(
         self,
         *,
@@ -743,71 +914,132 @@ class WBBrowser:
         page_title: str,
         candidates: Dict[str, List[str]],
     ) -> Optional[Dict]:
-        if self.page is None:
+        if self.page is None or not nm_id.isdigit():
             return None
 
         brands = [
             value
             for value in candidates.get("brands", [])
-            if value not in {"Бренды", "Купить сейчас", "В корзину", "В избранное"}
+            if value not in {
+                "Бренды",
+                "Купить сейчас",
+                "В корзину",
+                "В избранное",
+            }
             and "каталог бренда" not in value.lower()
             and len(value) <= 80
         ]
         brand_counts = Counter(brands)
         brand = next(
-            (value for value in brands if brand_counts[value] >= 2),
+            (
+                value
+                for value in brands
+                if brand_counts[value] >= 2
+            ),
             brands[0] if brands else "",
         )
 
         sellers = [
             value
             for value in candidates.get("sellers", [])
-            if value not in {"Стать продавцом", "Продавать товары", "Находки из Китая", "РИВ ГОШ"}
+            if value not in {
+                "Стать продавцом",
+                "Продавать товары",
+                "Находки из Китая",
+                "РИВ ГОШ",
+            }
             and not re.search(r"\d[,.]\d", value)
             and len(value.split()) <= 5
         ]
         seller = sellers[0] if sellers else ""
 
-        name = page_title
-        title_suffix = re.compile(
-            rf"\s+{re.escape(brand)}\s+{re.escape(nm_id)}\s+купить.*$",
-            re.IGNORECASE,
-        ) if brand else re.compile(
-            rf"\s+{re.escape(nm_id)}\s+купить.*$",
-            re.IGNORECASE,
+        name = self._extract_product_name(
+            nm_id=nm_id,
+            brand=brand,
+            page_title=page_title,
+            headings=candidates.get("headings", []),
         )
-        name = title_suffix.sub("", name).strip()
 
         price_values: List[int] = []
+
         for value in candidates.get("prices", []):
-            amounts = re.findall(r"([\d\s\u00a0]+)\s*₽", value)
-            if not amounts:
-                continue
-            price_values = [
+            amounts = re.findall(
+                r"([\d\s\u00a0]+)\s*₽",
+                value,
+            )
+
+            normalized_amounts = [
                 int(re.sub(r"\D", "", amount)) * 100
                 for amount in amounts
                 if re.sub(r"\D", "", amount)
             ]
-            if price_values:
+
+            normalized_amounts = [
+                amount
+                for amount in normalized_amounts
+                if amount > 0
+            ]
+
+            if normalized_amounts:
+                price_values = normalized_amounts
                 break
 
         rating = 0.0
         feedbacks = 0
+
         for value in candidates.get("ratings", []):
-            match = re.search(r"(\d(?:[,.]\d)?)\s*·\s*(\d+)\s+оцен", value)
-            if match:
-                rating = float(match.group(1).replace(",", "."))
-                feedbacks = int(match.group(2))
-                break
+            match = re.search(
+                r"(\d(?:[,.]\d)?)\s*[·•]?\s*(\d+)\s+(?:оцен|отзыв)",
+                value,
+                re.IGNORECASE,
+            )
+
+            if not match:
+                continue
+
+            rating = float(
+                match.group(1).replace(",", ".")
+            )
+            feedbacks = int(match.group(2))
+            break
 
         body_text = self.page.locator("body").inner_text()
-        available = "В корзину" in body_text or "Купить сейчас" in body_text
 
-        if not name or not nm_id.isdigit():
+        available = bool(
+            re.search(
+                r"\b(?:В корзину|Купить сейчас)\b",
+                body_text,
+                re.IGNORECASE,
+            )
+        )
+
+        if not name:
+            print(
+                "WB DOM product rejected: "
+                f"nm={nm_id}, reason=invalid_title, "
+                f"page_title={page_title!r}, "
+                f"headings={candidates.get('headings', [])!r}",
+                flush=True,
+            )
             return None
 
-        current_price = price_values[0] if price_values else 0
-        old_price = price_values[1] if len(price_values) > 1 else current_price
+        if not price_values:
+            print(
+                "WB DOM product rejected: "
+                f"nm={nm_id}, reason=price_not_found, "
+                f"title={name!r}, "
+                f"price_candidates={candidates.get('prices', [])!r}",
+                flush=True,
+            )
+            return None
+
+        current_price = price_values[0]
+        old_price = (
+            price_values[1]
+            if len(price_values) > 1
+            else current_price
+        )
+
         return {
             "id": int(nm_id),
             "brand": brand,
