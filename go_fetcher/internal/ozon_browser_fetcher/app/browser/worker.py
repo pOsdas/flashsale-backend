@@ -6,8 +6,12 @@ import traceback
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
-from ozon_browser_fetcher.app.browser.errors import OzonAntibotRejectedError
+from ozon_browser_fetcher.app.browser.errors import (
+    OzonAntibotRejectedError,
+    OzonMarketplaceUnauthorizedError,
+)
 from ozon_browser_fetcher.app.browser.manager import BrowserManager
 from ozon_browser_fetcher.app.metrics import (
     OZON_BROWSER_LAST_SUCCESS_TIMESTAMP_SECONDS,
@@ -197,6 +201,24 @@ class BrowserWorker:
                 }
             )
 
+        except OzonMarketplaceUnauthorizedError as exc:
+            OZON_BROWSER_TASK_EXECUTIONS_TOTAL.labels(
+                task_type=task_type,
+                result="error",
+                error_type="marketplace_unauthorized",
+            ).inc()
+
+            task["result_queue"].put(
+                {
+                    "ok": False,
+                    "status": "marketplace_unauthorized",
+                    "error_type": "unauthorized",
+                    "marketplace_status_code": 401,
+                    "error": str(exc),
+                    "trace": traceback.format_exc(),
+                }
+            )
+
         except OzonAntibotRejectedError as exc:
             OZON_BROWSER_TASK_EXECUTIONS_TOTAL.labels(
                 task_type=task_type,
@@ -258,9 +280,52 @@ class BrowserWorker:
 
         return 0
 
+    @staticmethod
+    def _watch_ozon_unauthorized(page):
+        unauthorized_urls: List[str] = []
+
+        def on_response(response) -> None:
+            try:
+                if response.status != 401:
+                    return
+
+                hostname = (
+                        urlparse(response.url).hostname
+                        or ""
+                ).lower()
+
+                if not (
+                        hostname == "ozon.ru"
+                        or hostname.endswith(".ozon.ru")
+                ):
+                    return
+
+                resource_type = response.request.resource_type
+
+                if resource_type not in {
+                    "document",
+                    "xhr",
+                    "fetch",
+                }:
+                    return
+
+                unauthorized_urls.append(
+                    response.url
+                )
+
+            except Exception:
+                return
+
+        page.on(
+            "response",
+            on_response,
+        )
+
+        return unauthorized_urls, on_response
+
     def _handle_product(
-        self,
-        task: Dict[str, Any],
+            self,
+            task: Dict[str, Any],
     ) -> Dict[str, Any]:
         url = str(task.get("url") or "").strip()
 
@@ -269,10 +334,42 @@ class BrowserWorker:
 
         page = self.manager.new_page()
 
+        unauthorized_urls, unauthorized_listener = (
+            self._watch_ozon_unauthorized(page)
+        )
+
         try:
-            product = parse_product_from_page(page, url)
+            try:
+                product = parse_product_from_page(
+                    page,
+                    url,
+                )
+
+            except OzonAntibotRejectedError:
+                raise
+
+            except OzonMarketplaceUnauthorizedError:
+                raise
+
+            except Exception as exc:
+                if unauthorized_urls:
+                    raise OzonMarketplaceUnauthorizedError(
+                        "Ozon returned HTTP 401 and the request "
+                        "did not recover; authentication cookies/session "
+                        "may no longer be accepted: "
+                        f"url={unauthorized_urls[-1]}"
+                    ) from exc
+
+                raise
 
             return product_to_dict(product)
+
+        except OzonMarketplaceUnauthorizedError:
+            raise
+
+        except OzonAntibotRejectedError:
+            raise
+
         except Exception:
             self.diagnostics_dir.mkdir(
                 parents=True,
@@ -283,6 +380,7 @@ class BrowserWorker:
             timestamp = datetime.now().strftime(
                 "%Y%m%d-%H%M%S-%f"
             )
+
             html_path = (
                     self.diagnostics_dir
                     / f"{timestamp}.html"
@@ -313,7 +411,12 @@ class BrowserWorker:
                 pass
 
             try:
-                body_text = page.locator("body").inner_text(timeout=3_000)
+                body_text = page.locator(
+                    "body"
+                ).inner_text(
+                    timeout=3_000,
+                )
+
                 text_path.write_text(
                     "\n".join(
                         [
@@ -336,13 +439,23 @@ class BrowserWorker:
                 f"prefix={self.diagnostics_dir / timestamp}",
                 flush=True,
             )
+
             raise
+
         finally:
+            try:
+                page.remove_listener(
+                    "response",
+                    unauthorized_listener,
+                )
+            except Exception:
+                pass
+
             self.manager.close_page(page)
 
     def _handle_search(
-        self,
-        task: Dict[str, Any],
+            self,
+            task: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
         query = str(task.get("query") or "").strip()
         limit = int(task.get("limit") or 10)
@@ -352,20 +465,51 @@ class BrowserWorker:
 
         page = self.manager.new_page()
 
+        unauthorized_urls, unauthorized_listener = (
+            self._watch_ozon_unauthorized(page)
+        )
+
         try:
-            products = parse_search_from_page(
-                page=page,
-                query=query,
-                limit=limit,
-            )
+            try:
+                products = parse_search_from_page(
+                    page=page,
+                    query=query,
+                    limit=limit,
+                )
+
+            except OzonAntibotRejectedError:
+                raise
+
+            except OzonMarketplaceUnauthorizedError:
+                raise
+
+            except Exception as exc:
+                if unauthorized_urls:
+                    raise OzonMarketplaceUnauthorizedError(
+                        "Ozon returned HTTP 401 and the request "
+                        "did not recover; authentication cookies/session "
+                        "may no longer be accepted: "
+                        f"url={unauthorized_urls[-1]}"
+                    ) from exc
+
+                raise
 
             return products_to_dicts(products)
+
         finally:
+            try:
+                page.remove_listener(
+                    "response",
+                    unauthorized_listener,
+                )
+            except Exception:
+                pass
+
             self.manager.close_page(page)
 
     def _handle_category(
-        self,
-        task: Dict[str, Any],
+            self,
+            task: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
         url = str(task.get("url") or "").strip()
         limit = int(task.get("limit") or 10)
@@ -375,15 +519,46 @@ class BrowserWorker:
 
         page = self.manager.new_page()
 
+        unauthorized_urls, unauthorized_listener = (
+            self._watch_ozon_unauthorized(page)
+        )
+
         try:
-            products = parse_category_from_page(
-                page=page,
-                url=url,
-                limit=limit,
-            )
+            try:
+                products = parse_category_from_page(
+                    page=page,
+                    url=url,
+                    limit=limit,
+                )
+
+            except OzonAntibotRejectedError:
+                raise
+
+            except OzonMarketplaceUnauthorizedError:
+                raise
+
+            except Exception as exc:
+                if unauthorized_urls:
+                    raise OzonMarketplaceUnauthorizedError(
+                        "Ozon returned HTTP 401 and the request "
+                        "did not recover; authentication cookies/session "
+                        "may no longer be accepted: "
+                        f"url={unauthorized_urls[-1]}"
+                    ) from exc
+
+                raise
 
             return products_to_dicts(products)
+
         finally:
+            try:
+                page.remove_listener(
+                    "response",
+                    unauthorized_listener,
+                )
+            except Exception:
+                pass
+
             self.manager.close_page(page)
 
     def submit_task(

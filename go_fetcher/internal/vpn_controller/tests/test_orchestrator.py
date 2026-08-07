@@ -463,6 +463,77 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(context.exception.status_code, 503)
             self.assertIn("preflight", str(context.exception).lower())
 
+    def test_ozon_401_is_marketplace_unauthorized(self):
+        response = WorkerResponse(
+            status_code=401,
+            body=(
+                b'{'
+                b'"status":"marketplace_unauthorized",'
+                b'"error_type":"unauthorized",'
+                b'"marketplace_status_code":401'
+                b'}'
+            ),
+            content_type="application/json",
+        )
+
+        status, effective = (
+            VPNParseOrchestrator._classify_worker_response(
+                marketplace="ozon",
+                response=response,
+            )
+        )
+
+        self.assertEqual(
+            status,
+            ParseAttemptStatus.MARKETPLACE_UNAUTHORIZED,
+        )
+        self.assertEqual(effective, 401)
+
+    def test_ozon_401_does_not_retry_next_vpn_profile(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+
+            orchestrator, _, _, worker = self.make_orchestrator(
+                root,
+                [
+                    WorkerResponse(
+                        status_code=401,
+                        body=(
+                            b'{'
+                            b'"status":"marketplace_unauthorized",'
+                            b'"error_type":"unauthorized"'
+                            b'}'
+                        ),
+                        content_type="application/json",
+                    ),
+                    WorkerResponse(
+                        status_code=200,
+                        body=b'{"status":"ok"}',
+                        content_type="application/json",
+                    ),
+                ],
+            )
+
+            response = orchestrator.execute(
+                marketplace="ozon",
+                worker_path="/api/v1/product",
+                payload={
+                    "url": "https://www.ozon.ru/product/1",
+                },
+            )
+
+            self.assertEqual(response.status_code, 401)
+
+            # Второй VPN-профиль использоваться не должен.
+            self.assertEqual(len(worker.payloads), 1)
+
+            runtime = orchestrator.runtime_snapshot()
+
+            self.assertEqual(
+                runtime["last_request_attempts"][0]["status"],
+                "marketplace_unauthorized",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

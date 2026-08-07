@@ -2219,3 +2219,65 @@ groups:
       service: vpn_controller
       category: vpn_route
     isPaused: false
+- orgId: 1
+  name: Flashsale marketplace authentication alerts
+  folder: Flashsale
+  interval: 10s
+  rules:
+  - uid: flashsale_ozon_authentication_failed
+    title: Ozon Authentication Failed
+    condition: C
+    data:
+    - refId: A
+      datasourceUid: Prometheus
+      relativeTimeRange:
+        from: 300
+        to: 0
+      model:
+        expr: sum(increase(vpn_marketplace_auth_failures_total{job="vpn_controller",marketplace="ozon"}[5m])) or vector(0)
+        refId: A
+        instant: true
+        range: false
+
+    - refId: B
+      datasourceUid: __expr__
+      model:
+        type: reduce
+        expression: A
+        reducer: last
+        refId: B
+
+    - refId: C
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            type: last
+          type: query
+        refId: C
+
+    noDataState: OK
+    execErrState: Error
+    for: 0s
+
+    annotations:
+      summary: Ozon authentication failed
+      description: Ozon returned HTTP 401. The current authentication session or cookies are no longer accepted. Replace ozon_cookie.txt.
+
+    labels:
+      severity: critical
+      service: vpn_controller
+      category: application
+
+    isPaused: false

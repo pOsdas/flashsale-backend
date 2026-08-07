@@ -46,6 +46,22 @@ def make_worker_response(result: dict):
     if result.get("ok"):
         return jsonify(result["data"]), 200
 
+    if result.get("status") == "marketplace_unauthorized":
+        return jsonify(
+            {
+                "status": "marketplace_unauthorized",
+                "error_type": result.get(
+                    "error_type",
+                    "unauthorized",
+                ),
+                "marketplace_status_code": 401,
+                "error": result.get(
+                    "error",
+                    "Ozon authentication failed",
+                ),
+            }
+        ), 401
+
     if result.get("status") == "marketplace_rejected":
         return jsonify(
             {
@@ -85,6 +101,22 @@ def make_product_response(result: dict):
                 "product": result["data"],
             }
         ), 200
+
+    if result.get("status") == "marketplace_unauthorized":
+        return jsonify(
+            {
+                "status": "marketplace_unauthorized",
+                "error_type": result.get(
+                    "error_type",
+                    "unauthorized",
+                ),
+                "marketplace_status_code": 401,
+                "error": result.get(
+                    "error",
+                    "Ozon authentication failed",
+                ),
+            }
+        ), 401
 
     if result.get("status") == "marketplace_rejected":
         return jsonify(

@@ -1,4 +1,3 @@
-
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -27,6 +26,7 @@ class ParseAttemptStatus(StrEnum):
     MARKETPLACE_NOT_FOUND = "marketplace_not_found"
     MARKETPLACE_TIMEOUT = "marketplace_timeout"
     MARKETPLACE_CONNECTION_ERROR = "marketplace_connection_error"
+    MARKETPLACE_UNAUTHORIZED = "marketplace_unauthorized"
     MARKETPLACE_REJECTED = "marketplace_rejected"
     PARSER_ERROR = "parser_error"
     INVALID_RESPONSE = "invalid_response"

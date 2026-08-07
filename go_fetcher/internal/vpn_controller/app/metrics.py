@@ -107,3 +107,16 @@ VPN_ACTIVE_SESSION_LAST_USED_TIMESTAMP_SECONDS = Gauge(
     "vpn_active_session_last_used_timestamp_seconds",
     "Unix timestamp when the active VPN parsing session was last used",
 )
+
+VPN_MARKETPLACE_AUTH_FAILURES_TOTAL = Counter(
+    "vpn_marketplace_auth_failures_total",
+    "Marketplace authentication failures detected by the VPN gateway",
+    ["marketplace"],
+)
+
+VPN_MARKETPLACE_AUTH_FAILURES_TOTAL.labels(
+    marketplace="ozon",
+)
+VPN_MARKETPLACE_AUTH_FAILURES_TOTAL.labels(
+    marketplace="wb",
+)

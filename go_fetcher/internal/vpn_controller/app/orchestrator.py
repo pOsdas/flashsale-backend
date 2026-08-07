@@ -16,6 +16,7 @@ from vpn_controller.app.metrics import (
     VPN_PARSE_ATTEMPTS_TOTAL,
     VPN_PARSE_REQUEST_DURATION_SECONDS,
     VPN_PARSE_REQUESTS_TOTAL,
+    VPN_MARKETPLACE_AUTH_FAILURES_TOTAL,
 )
 from vpn_controller.app.models import (
     ParseAttemptResult,
@@ -68,6 +69,7 @@ TERMINAL_WITHOUT_VPN_RETRY = {
     ParseAttemptStatus.REQUEST_INVALID,
     ParseAttemptStatus.MARKETPLACE_NOT_FOUND,
     ParseAttemptStatus.PARSER_ERROR,
+    ParseAttemptStatus.MARKETPLACE_UNAUTHORIZED,
 }
 
 
@@ -626,6 +628,18 @@ class VPNParseOrchestrator:
                 payload.get("error_type") or ""
             ).strip().casefold()
 
+        explicitly_unauthorized = bool(
+            effective_status_code == 401
+            or response_status == "marketplace_unauthorized"
+            or response_error_type == "unauthorized"
+        )
+
+        if explicitly_unauthorized:
+            return (
+                ParseAttemptStatus.MARKETPLACE_UNAUTHORIZED,
+                effective_status_code,
+            )
+
         explicitly_rejected = bool(
             effective_status_code in {403, 429, 451, 498}
             or response_status == "marketplace_rejected"
@@ -708,7 +722,7 @@ class VPNParseOrchestrator:
                 effective_status_code,
             )
 
-        if effective_status_code in {400, 401, 405, 409, 422}:
+        if effective_status_code in {400, 405, 409, 422}:
             return (
                 ParseAttemptStatus.REQUEST_INVALID,
                 effective_status_code,
@@ -739,6 +753,12 @@ class VPNParseOrchestrator:
             profile=attempt.profile_name,
             result=attempt.status.value,
         ).inc()
+
+        if attempt.status == ParseAttemptStatus.MARKETPLACE_UNAUTHORIZED:
+            VPN_MARKETPLACE_AUTH_FAILURES_TOTAL.labels(
+                marketplace=attempt.marketplace,
+            ).inc()
+
         logger.info(
             "VPN parse attempt completed marketplace=%s cycle_id=%s "
             "exit_ip=%s profile=%r status=%s worker_status=%s "
