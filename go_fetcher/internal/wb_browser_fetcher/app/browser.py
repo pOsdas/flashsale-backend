@@ -618,6 +618,47 @@ class WBBrowser:
 
         return "https://www.wildberries.ru/"
 
+    @staticmethod
+    def _is_wb_unauthorized_response(response) -> bool:
+        try:
+            if response.status != 401:
+                return False
+
+            hostname = (urlparse(response.url).hostname or "").lower()
+            if not (
+                hostname == "wildberries.ru"
+                or hostname.endswith(".wildberries.ru")
+            ):
+                return False
+
+            return response.request.resource_type in {
+                "document",
+                "xhr",
+                "fetch",
+            }
+        except Exception:
+            return False
+
+    @staticmethod
+    def _marketplace_unauthorized_result(response_url: str) -> Dict:
+        return {
+            "status_code": 401,
+            "body": json.dumps(
+                {
+                    "status": "marketplace_unauthorized",
+                    "error_type": "unauthorized",
+                    "marketplace_status_code": 401,
+                    "error": (
+                        "Wildberries returned HTTP 401; "
+                        "authentication cookies/session are no longer accepted: "
+                        f"url={response_url}"
+                    ),
+                },
+                ensure_ascii=False,
+            ),
+            "response_url": response_url,
+        }
+
     def _prepare_page_for_request(self, url: str) -> Optional[Dict]:
         if self.page is None:
             raise RuntimeError("WB browser page is not ready")
@@ -625,15 +666,32 @@ class WBBrowser:
         referer = self._referer_for_api_url(url)
         original_query = parse_qs(urlparse(url).query)
         target_nm = str((original_query.get("nm") or [""])[0]).strip()
+
         captured_responses: List[Dict] = []
+        unauthorized_urls: List[str] = []
 
         def capture_response(response) -> None:
+            if self._is_wb_unauthorized_response(response):
+                unauthorized_urls.append(response.url)
+
+                print(
+                    "WB browser observed marketplace unauthorized response: "
+                    f"status=401, url={response.url}",
+                    flush=True,
+                )
+
             if "/__internal/u-card/cards/v4/detail" not in response.url:
                 return
 
             response_nm = str(
-                (parse_qs(urlparse(response.url).query).get("nm") or [""])[0]
+                (
+                    parse_qs(
+                        urlparse(response.url).query
+                    ).get("nm")
+                    or [""]
+                )[0]
             )
+
             if target_nm not in response_nm.split(";"):
                 return
 
@@ -642,7 +700,12 @@ class WBBrowser:
                 f"status={response.status}, url={response.url}",
                 flush=True,
             )
-            if not target_nm or response.status < 200 or response.status >= 300:
+
+            if (
+                not target_nm
+                or response.status < 200
+                or response.status >= 300
+            ):
                 return
 
             try:
@@ -659,52 +722,116 @@ class WBBrowser:
                     flush=True,
                 )
 
-        self.page.on("response", capture_response)
-        response = self.page.goto(referer, wait_until="domcontentloaded")
-        self._wait_for_page_ready(
-            stage="request_page",
-            require_search_content=(
-                "/search/" in urlparse(url).path
-                and bool(
-                    str(
-                        (original_query.get("query") or [""])[0]
-                    ).strip()
-                )
-            ),
-            expected_nm_id=target_nm,
+        self.page.on(
+            "response",
+            capture_response,
         )
-        self.page.remove_listener("response", capture_response)
+
+        try:
+            try:
+                response = self.page.goto(
+                    referer,
+                    wait_until="domcontentloaded",
+                )
+
+                self._wait_for_page_ready(
+                    stage="request_page",
+                    require_search_content=(
+                        "/search/" in urlparse(url).path
+                        and bool(
+                            str(
+                                (
+                                    original_query.get("query")
+                                    or [""]
+                                )[0]
+                            ).strip()
+                        )
+                    ),
+                    expected_nm_id=target_nm,
+                )
+
+            except Exception:
+                if captured_responses:
+                    captured = captured_responses[-1]
+
+                    print(
+                        "WB browser captured frontend API response "
+                        "before page readiness failed: "
+                        f"status={captured['status_code']}, "
+                        f"nm={target_nm}",
+                        flush=True,
+                    )
+
+                    return captured
+
+                if unauthorized_urls:
+                    return self._marketplace_unauthorized_result(
+                        unauthorized_urls[-1]
+                    )
+
+                raise
+
+        finally:
+            try:
+                self.page.remove_listener(
+                    "response",
+                    capture_response,
+                )
+            except Exception:
+                pass
+
         title = self.page.title()
+
         dom_candidates: Dict[str, List[str]] = {}
+
         for name, selector in {
             "headings": "h1",
             "prices": '[class*="price"]',
-            "sellers": 'a[href*="seller"], [class*="seller"]',
-            "ratings": '[class*="rating"], [class*="review"]',
-            "brands": 'a[href*="brand"], [class*="brand"]',
+            "sellers": (
+                'a[href*="seller"], '
+                '[class*="seller"]'
+            ),
+            "ratings": (
+                '[class*="rating"], '
+                '[class*="review"]'
+            ),
+            "brands": (
+                'a[href*="brand"], '
+                '[class*="brand"]'
+            ),
         }.items():
             try:
                 dom_candidates[name] = [
                     " ".join(value.split())[:200]
-                    for value in self.page.locator(selector).all_inner_texts()
+                    for value in (
+                        self.page.locator(
+                            selector
+                        ).all_inner_texts()
+                    )
                     if value.strip()
                 ][:20]
+
             except Exception:
                 dom_candidates[name] = []
+
         print(
             "WB browser request page prepared: "
             f"status={response.status if response else 0}, "
-            f"url={self.page.url}, title={title!r}",
+            f"url={self.page.url}, "
+            f"title={title!r}",
             flush=True,
         )
 
         if captured_responses:
             captured = captured_responses[-1]
+
             print(
                 "WB browser captured frontend API response: "
-                f"status={captured['status_code']}, nm={target_nm}",
+                f"status={captured['status_code']}, "
+                f"nm={target_nm}",
                 flush=True,
             )
+
             return captured
 
         if target_nm:
@@ -713,34 +840,55 @@ class WBBrowser:
                 page_title=title,
                 candidates=dom_candidates,
             )
+
             if product is not None:
                 print(
                     "WB browser product extracted from DOM: "
-                    f"nm={target_nm}, title={product['name']!r}, "
+                    f"nm={target_nm}, "
+                    f"title={product['name']!r}, "
                     f"price_u={product['salePriceU']}",
                     flush=True,
                 )
+
                 return {
                     "status_code": 200,
-                    "body": '{"products":[' + json.dumps(
-                        product,
-                        ensure_ascii=False,
-                    ) + "]}",
+                    "body": (
+                        '{"products":['
+                        + json.dumps(
+                            product,
+                            ensure_ascii=False,
+                        )
+                        + "]}"
+                    ),
                 }
 
-        search_query = str((original_query.get("query") or [""])[0]).strip()
-        if "/search/" in urlparse(url).path and search_query:
+        search_query = str(
+            (
+                original_query.get("query")
+                or [""]
+            )[0]
+        ).strip()
+
+        if (
+            "/search/" in urlparse(url).path
+            and search_query
+        ):
             products = self._extract_search_products()
+
             if products:
                 print(
                     "WB browser search products extracted from DOM: "
-                    f"query={search_query!r}, products={len(products)}",
+                    f"query={search_query!r}, "
+                    f"products={len(products)}",
                     flush=True,
                 )
+
                 return {
                     "status_code": 200,
                     "body": json.dumps(
-                        {"products": products},
+                        {
+                            "products": products,
+                        },
                         ensure_ascii=False,
                     ),
                 }

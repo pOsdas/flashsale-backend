@@ -2281,3 +2281,60 @@ groups:
       category: application
 
     isPaused: false
+  - uid: flashsale_wb_authentication_failed
+    title: Wildberries Authentication Failed
+    condition: C
+    data:
+      - refId: A
+        datasourceUid: Prometheus
+        relativeTimeRange:
+          from: 300
+          to: 0
+        model:
+          expr: sum(increase(vpn_marketplace_auth_failures_total{job="vpn_controller",marketplace="wb"}[5m])) or vector(0)
+          refId: A
+          instant: true
+          range: false
+
+      - refId: B
+        datasourceUid: __expr__
+        model:
+          type: reduce
+          expression: A
+          reducer: last
+          refId: B
+
+      - refId: C
+        datasourceUid: __expr__
+        model:
+          type: threshold
+          expression: B
+          conditions:
+            - evaluator:
+                type: gt
+                params:
+                  - 0
+              operator:
+                type: and
+              query:
+                params:
+                  - C
+              reducer:
+                type: last
+              type: query
+          refId: C
+
+    noDataState: OK
+    execErrState: Error
+    for: 0s
+
+    annotations:
+      summary: Wildberries authentication failed
+      description: Wildberries returned HTTP 401. The current authentication session or cookies are no longer accepted. Replace wb_cookie.txt.
+
+    labels:
+      severity: critical
+      service: vpn_controller
+      category: application
+
+    isPaused: false

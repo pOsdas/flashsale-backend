@@ -39,34 +39,99 @@ atexit.register(browser.stop)
 def fetch():
     data = request.get_json(silent=True) or {}
     url = str(data.get("url") or "").strip()
+
     if not is_allowed_url(url):
-        return jsonify({"error": "url must be an allowed Wildberries HTTPS URL"}), 400
+        return jsonify(
+            {
+                "error": (
+                    "url must be an allowed Wildberries HTTPS URL"
+                )
+            }
+        ), 400
 
     try:
-        print(f"WB browser fetch requested: url={url}", flush=True)
+        print(
+            f"WB browser fetch requested: url={url}",
+            flush=True,
+        )
+
         result = browser.fetch(
             url,
-            proxy_url=str(data.get("proxy_url") or "").strip(),
-            vpn_session_id=str(data.get("vpn_session_id") or "").strip(),
+            proxy_url=str(
+                data.get("proxy_url") or ""
+            ).strip(),
+            vpn_session_id=str(
+                data.get("vpn_session_id") or ""
+            ).strip(),
             browser_profile_id=str(
                 data.get("browser_profile_id") or ""
             ).strip(),
         )
-        body_text = str(result.get("body") or "")
+
+        status_code = int(
+            result.get("status_code") or 0
+        )
+
+        body_text = str(
+            result.get("body") or ""
+        )
+
         try:
             body = json.loads(body_text)
         except json.JSONDecodeError:
             body = body_text
 
+        if status_code == 401:
+            if isinstance(body, dict):
+                unauthorized_payload = dict(body)
+            else:
+                unauthorized_payload = {
+                    "error": (
+                        str(body).strip()
+                        or "Wildberries returned HTTP 401"
+                    ),
+                }
+
+            unauthorized_payload.setdefault(
+                "status",
+                "marketplace_unauthorized",
+            )
+            unauthorized_payload.setdefault(
+                "error_type",
+                "unauthorized",
+            )
+            unauthorized_payload.setdefault(
+                "marketplace_status_code",
+                401,
+            )
+
+            print(
+                "WB browser marketplace unauthorized: "
+                f"url={url}",
+                flush=True,
+            )
+
+            return jsonify(
+                unauthorized_payload
+            ), 401
+
         return jsonify(
             {
-                "status_code": int(result.get("status_code") or 0),
+                "status_code": status_code,
                 "body": body,
             }
         )
+
     except Exception as exc:
-        print(f"WB browser fetch failed: error={exc}", flush=True)
-        return jsonify({"error": str(exc)}), 500
+        print(
+            f"WB browser fetch failed: error={exc}",
+            flush=True,
+        )
+        return jsonify(
+            {
+                "error": str(exc),
+            }
+        ), 500
 
 
 @app.get("/api/v1/health")

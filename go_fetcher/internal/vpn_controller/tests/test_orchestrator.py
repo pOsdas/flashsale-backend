@@ -534,6 +534,102 @@ class OrchestratorTests(unittest.TestCase):
                 "marketplace_unauthorized",
             )
 
+    def test_wb_401_is_marketplace_unauthorized(self):
+        response = WorkerResponse(
+            status_code=401,
+            body=(
+                b'{'
+                b'"status":"marketplace_unauthorized",'
+                b'"error_type":"unauthorized",'
+                b'"marketplace_status_code":401'
+                b'}'
+            ),
+            content_type="application/json",
+        )
+
+        status, effective = (
+            VPNParseOrchestrator._classify_worker_response(
+                marketplace="wb",
+                response=response,
+            )
+        )
+
+        self.assertEqual(
+            status,
+            ParseAttemptStatus.MARKETPLACE_UNAUTHORIZED,
+        )
+        self.assertEqual(
+            effective,
+            401,
+        )
+
+    def test_wb_401_does_not_retry_next_vpn_profile(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+
+            orchestrator, _, _, worker = self.make_orchestrator(
+                root,
+                [
+                    WorkerResponse(
+                        status_code=401,
+                        body=(
+                            b'{'
+                            b'"status":"marketplace_unauthorized",'
+                            b'"error_type":"unauthorized",'
+                            b'"marketplace_status_code":401'
+                            b'}'
+                        ),
+                        content_type="application/json",
+                    ),
+                    WorkerResponse(
+                        status_code=200,
+                        body=(
+                            b'{'
+                            b'"status_code":200,'
+                            b'"body":{}'
+                            b'}'
+                        ),
+                        content_type="application/json",
+                    ),
+                ],
+            )
+
+            response = orchestrator.execute(
+                marketplace="wb",
+                worker_path="/api/v1/fetch",
+                payload={
+                    "url": (
+                        "https://www.wildberries.ru/"
+                        "__internal/u-card/cards/v4/detail?nm=1"
+                    ),
+                },
+            )
+
+            self.assertEqual(
+                response.status_code,
+                401,
+            )
+
+            # Второй VPN-профиль использоваться не должен.
+            self.assertEqual(
+                len(worker.payloads),
+                1,
+            )
+
+            runtime = orchestrator.runtime_snapshot()
+
+            self.assertEqual(
+                runtime[
+                    "last_request_attempts"
+                ][0]["status"],
+                "marketplace_unauthorized",
+            )
+
+            self.assertEqual(
+                runtime["marketplace_failed_profiles"],
+                {},
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
