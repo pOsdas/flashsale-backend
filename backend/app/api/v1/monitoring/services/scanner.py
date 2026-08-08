@@ -59,6 +59,8 @@ class MonitoringTargetProcessResult:
     effective_cache_minutes: int | None = None
     error: str = ""
     busy: bool = False
+    temporarily_unavailable: bool = False
+    retry_after_seconds: int | None = None
 
 
 class MonitoringScanner:
@@ -416,6 +418,8 @@ class MonitoringScanner:
                 success=False,
                 error=str(exc),
                 busy=True,
+                temporarily_unavailable=True,
+                retry_after_seconds=exc.retry_after_seconds,
             )
 
         except ProductCacheBusyError as exc:

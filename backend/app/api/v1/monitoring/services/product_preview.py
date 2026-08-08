@@ -40,6 +40,17 @@ class ProductPreviewBusyError(ProductPreviewError):
     pass
 
 
+class ProductPreviewTemporarilyUnavailableError(ProductPreviewError):
+    def __init__(
+            self,
+            message: str,
+            *,
+            retry_after_seconds: int,
+    ) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = max(1, int(retry_after_seconds))
+
+
 class ProductPreviewService:
     def __init__(
             self,
@@ -77,6 +88,10 @@ class ProductPreviewService:
             ) from exc
 
         except MonitoringFetcherTemporarilyUnavailableError as exc:
+            retry_after_seconds = max(
+                1,
+                int(exc.retry_after_seconds),
+            )
             logger.warning(
                 "Product preview fetcher is temporarily unavailable",
                 extra={
@@ -84,25 +99,15 @@ class ProductPreviewService:
                     "marketplace": marketplace,
                     "url": url,
                     "error": str(exc),
+                    "retry_after_seconds": retry_after_seconds,
                 },
             )
-            raise ProductPreviewBusyError(
-                "Сервис проверки товара временно занят. "
-                "Попробуйте еще раз через несколько секунд."
-            ) from exc
-
-        except MonitoringFetcherError as exc:
-            logger.warning(
-                "Product preview fetcher error",
-                extra={
-                    "service": "product_preview",
-                    "marketplace": marketplace,
-                    "url": url,
-                    "error": str(exc),
-                },
-            )
-            raise ProductPreviewError(
-                "Не удалось получить товар. Проверьте ссылку или попробуйте позже."
+            raise ProductPreviewTemporarilyUnavailableError(
+                _build_temporary_unavailable_message(
+                    error=str(exc),
+                    retry_after_seconds=retry_after_seconds,
+                ),
+                retry_after_seconds=retry_after_seconds,
             ) from exc
 
         except MonitoringFetcherError as exc:
@@ -194,3 +199,39 @@ class ProductPreviewService:
             return None
 
         return float(value)
+
+
+def _build_temporary_unavailable_message(
+        *,
+        error: str,
+        retry_after_seconds: int,
+) -> str:
+    normalized_error = error.lower()
+    retry_text = f"через ~{retry_after_seconds} сек."
+
+    if (
+            "vpn" in normalized_error
+            and (
+                "not ready" in normalized_error
+                or "preflight" in normalized_error
+                or "parse window" in normalized_error
+            )
+    ):
+        return (
+            "VPN-профиль для проверки товара сейчас подготавливается. "
+            f"Повторите попытку {retry_text}"
+        )
+
+    if (
+            "busy" in normalized_error
+            or "status=429" in normalized_error
+    ):
+        return (
+            "Сервис проверки товара сейчас занят. "
+            f"Повторите попытку {retry_text}"
+        )
+
+    return (
+        "Сервис проверки товара временно недоступен. "
+        f"Повторите попытку {retry_text}"
+    )

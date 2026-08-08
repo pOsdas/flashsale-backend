@@ -56,6 +56,19 @@ class MonitoringTargetCheckBusyError(
     """Another process is currently refreshing the same product."""
 
 
+class MonitoringTargetCheckTemporarilyUnavailableError(
+    MonitoringTargetCheckError,
+):
+    def __init__(
+        self,
+        message: str,
+        *,
+        retry_after_seconds: int,
+    ) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = max(1, int(retry_after_seconds))
+
+
 class MonitoringTargetUpdateError(
     MonitoringTargetServiceError,
 ):
@@ -538,6 +551,19 @@ def check_monitoring_target_now(
         trigger="manual_check",
     )
 
+    if process_result.temporarily_unavailable:
+        retry_after_seconds = max(
+            1,
+            int(process_result.retry_after_seconds or 60),
+        )
+        raise MonitoringTargetCheckTemporarilyUnavailableError(
+            _build_temporary_unavailable_message(
+                error=process_result.error,
+                retry_after_seconds=retry_after_seconds,
+            ),
+            retry_after_seconds=retry_after_seconds,
+        )
+
     if process_result.busy:
         raise MonitoringTargetCheckBusyError(
             process_result.error
@@ -621,3 +647,39 @@ def _calculate_next_check_at(
         return now
 
     return calculated_next_check_at
+
+
+def _build_temporary_unavailable_message(
+    *,
+    error: str,
+    retry_after_seconds: int,
+) -> str:
+    normalized_error = error.lower()
+    retry_text = f"через ~{retry_after_seconds} сек."
+
+    if (
+        "vpn" in normalized_error
+        and (
+            "not ready" in normalized_error
+            or "preflight" in normalized_error
+            or "parse window" in normalized_error
+        )
+    ):
+        return (
+            "VPN-профиль для проверки товара сейчас подготавливается. "
+            f"Повторите попытку {retry_text}"
+        )
+
+    if (
+        "busy" in normalized_error
+        or "status=429" in normalized_error
+    ):
+        return (
+            "Сервис проверки товара сейчас занят. "
+            f"Повторите попытку {retry_text}"
+        )
+
+    return (
+        "Сервис проверки товара временно недоступен. "
+        f"Повторите попытку {retry_text}"
+    )

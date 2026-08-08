@@ -45,10 +45,12 @@ from app.api.v1.monitoring.services.product_preview import (
     ProductPreviewBusyError,
     ProductPreviewError,
     ProductPreviewService,
+    ProductPreviewTemporarilyUnavailableError,
 )
 from app.api.v1.monitoring.services.target_service import (
     MonitoringTargetCheckBusyError,
     MonitoringTargetCheckError,
+    MonitoringTargetCheckTemporarilyUnavailableError,
     MonitoringTargetNotFoundError,
     MonitoringTargetUpdateError,
     check_monitoring_target_now,
@@ -569,6 +571,13 @@ class MonitoringTargetResumeAPIView(
                 "the same product."
             ),
         ),
+        503: OpenApiResponse(
+            response=MonitoringTargetActionErrorSerializer,
+            description=(
+                "The VPN profile or marketplace gateway is "
+                "temporarily unavailable."
+            ),
+        ),
         502: OpenApiResponse(
             response=MonitoringTargetActionErrorSerializer,
             description=(
@@ -598,6 +607,17 @@ class MonitoringTargetCheckNowAPIView(APIView):
                 status_code=status.HTTP_404_NOT_FOUND,
                 details={
                     "target_id": str(target_id),
+                },
+            ) from exc
+
+        except MonitoringTargetCheckTemporarilyUnavailableError as exc:
+            raise APIError(
+                error_code="marketplace_temporarily_unavailable",
+                message=str(exc),
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                details={
+                    "target_id": str(target_id),
+                    "retry_after_seconds": exc.retry_after_seconds,
                 },
             ) from exc
 
@@ -795,6 +815,13 @@ class AlertListAPIView(generics.ListAPIView):
                 "data is invalid."
             ),
         ),
+        503: OpenApiResponse(
+            response=ProductPreviewErrorResponseSerializer,
+            description=(
+                "The VPN profile or marketplace gateway is "
+                "temporarily unavailable."
+            ),
+        ),
     },
 )
 class ProductPreviewView(APIView):
@@ -819,6 +846,18 @@ class ProductPreviewView(APIView):
                 ),
                 url=serializer.validated_data["url"],
             )
+
+        except ProductPreviewTemporarilyUnavailableError as exc:
+            raise APIError(
+                error_code="marketplace_temporarily_unavailable",
+                message=str(exc),
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                details={
+                    "marketplace": serializer.validated_data["marketplace"],
+                    "url": serializer.validated_data["url"],
+                    "retry_after_seconds": exc.retry_after_seconds,
+                },
+            ) from exc
 
         except ProductPreviewBusyError as exc:
             raise APIError(

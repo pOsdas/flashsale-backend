@@ -9,6 +9,7 @@ from app.api.v1.monitoring.services.target_query_service import (
 from app.api.v1.monitoring.services.target_service import (
     MonitoringTargetCheckBusyError,
     MonitoringTargetCheckError,
+    MonitoringTargetCheckTemporarilyUnavailableError,
     MonitoringTargetNotFoundError,
     check_monitoring_target_now,
     delete_monitoring_target,
@@ -340,6 +341,17 @@ class TelegramProductsHandler:
                 user=user_context.user,
                 target_id=target_id,
             )
+        except MonitoringTargetCheckTemporarilyUnavailableError as exc:
+            TELEGRAM_TARGET_ACTIONS_TOTAL.labels(
+                action="check",
+                result="temporarily_unavailable",
+            ).inc()
+
+            self.client.send_message(
+                chat_id=chat_id,
+                text=f"⏳ {exc}",
+            )
+            return
         except MonitoringTargetCheckBusyError:
             TELEGRAM_TARGET_ACTIONS_TOTAL.labels(
                 action="check",

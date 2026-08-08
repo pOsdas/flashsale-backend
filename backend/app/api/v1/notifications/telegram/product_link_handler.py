@@ -6,6 +6,7 @@ from app.api.v1.monitoring.services.marketplace_url import (
 from app.api.v1.monitoring.services.product_preview import (
     ProductPreviewError,
     ProductPreviewService,
+    ProductPreviewTemporarilyUnavailableError,
 )
 from app.api.v1.monitoring.services.target_duplicate_service import (
     find_existing_monitoring_target,
@@ -113,6 +114,17 @@ class TelegramProductLinkHandler:
                 marketplace=resolved_url.marketplace,
                 url=resolved_url.url,
             )
+        except ProductPreviewTemporarilyUnavailableError as exc:
+            TELEGRAM_PREVIEWS_TOTAL.labels(
+                marketplace=marketplace_label,
+                result="temporarily_unavailable",
+            ).inc()
+            self.replies.send_message(
+                chat_id=user_context.telegram_chat_id,
+                text=f"⏳ {exc}",
+            )
+            return
+
         except ProductPreviewError as exc:
             TELEGRAM_PREVIEWS_TOTAL.labels(
                 marketplace=marketplace_label,
