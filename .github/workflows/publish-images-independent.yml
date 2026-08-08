@@ -11,37 +11,128 @@ permissions:
   packages: write
 
 jobs:
+  changes:
+    name: Detect changed images
+    runs-on: ubuntu-latest
+
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Build image matrix
+        id: matrix
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            MATRIX='[
+              {
+                "image": "flashsale-backend",
+                "context": "./backend",
+                "dockerfile": "./backend/Dockerfile"
+              },
+              {
+                "image": "flashsale-go-fetcher",
+                "context": "./go_fetcher",
+                "dockerfile": "./go_fetcher/Dockerfile"
+              },
+              {
+                "image": "flashsale-ozon-browser-fetcher",
+                "context": "./go_fetcher/internal",
+                "dockerfile": "./go_fetcher/internal/ozon_browser_fetcher/Dockerfile"
+              },
+              {
+                "image": "flashsale-wb-browser-fetcher",
+                "context": "./go_fetcher/internal",
+                "dockerfile": "./go_fetcher/internal/wb_browser_fetcher/Dockerfile"
+              },
+              {
+                "image": "flashsale-vpn-controller",
+                "context": "./go_fetcher/internal",
+                "dockerfile": "./go_fetcher/internal/vpn_controller/Dockerfile"
+              },
+              {
+                "image": "flashsale-grafana",
+                "context": "./grafana",
+                "dockerfile": "./grafana/Dockerfile"
+              }
+            ]'
+
+            echo "matrix=$(echo "$MATRIX" | jq -c .)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          CHANGED_FILES=$(git diff --name-only HEAD^ HEAD)
+
+          MATRIX='[]'
+
+          if echo "$CHANGED_FILES" | grep -q '^backend/'; then
+            MATRIX=$(echo "$MATRIX" | jq -c '. + [{
+              "image": "flashsale-backend",
+              "context": "./backend",
+              "dockerfile": "./backend/Dockerfile"
+            }]')
+          fi
+
+          if echo "$CHANGED_FILES" | grep -q '^go_fetcher/'; then
+            MATRIX=$(echo "$MATRIX" | jq -c '. + [{
+              "image": "flashsale-go-fetcher",
+              "context": "./go_fetcher",
+              "dockerfile": "./go_fetcher/Dockerfile"
+            }]')
+          fi
+
+          if echo "$CHANGED_FILES" | grep -q '^go_fetcher/internal/ozon_browser_fetcher/'; then
+            MATRIX=$(echo "$MATRIX" | jq -c '. + [{
+              "image": "flashsale-ozon-browser-fetcher",
+              "context": "./go_fetcher/internal",
+              "dockerfile": "./go_fetcher/internal/ozon_browser_fetcher/Dockerfile"
+            }]')
+          fi
+
+          if echo "$CHANGED_FILES" | grep -q '^go_fetcher/internal/wb_browser_fetcher/'; then
+            MATRIX=$(echo "$MATRIX" | jq -c '. + [{
+              "image": "flashsale-wb-browser-fetcher",
+              "context": "./go_fetcher/internal",
+              "dockerfile": "./go_fetcher/internal/wb_browser_fetcher/Dockerfile"
+            }]')
+          fi
+
+          if echo "$CHANGED_FILES" | grep -q '^go_fetcher/internal/vpn_controller/'; then
+            MATRIX=$(echo "$MATRIX" | jq -c '. + [{
+              "image": "flashsale-vpn-controller",
+              "context": "./go_fetcher/internal",
+              "dockerfile": "./go_fetcher/internal/vpn_controller/Dockerfile"
+            }]')
+          fi
+
+          if echo "$CHANGED_FILES" | grep -q '^grafana/'; then
+            MATRIX=$(echo "$MATRIX" | jq -c '. + [{
+              "image": "flashsale-grafana",
+              "context": "./grafana",
+              "dockerfile": "./grafana/Dockerfile"
+            }]')
+          fi
+
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+
   publish:
     name: Publish ${{ matrix.image }}
+    needs:
+      - changes
+
+    if: needs.changes.outputs.matrix != '[]'
+
     runs-on: ubuntu-latest
 
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - image: flashsale-backend
-            context: ./backend
-            dockerfile: ./backend/Dockerfile
-
-          - image: flashsale-go-fetcher
-            context: ./go_fetcher
-            dockerfile: ./go_fetcher/Dockerfile
-
-          - image: flashsale-ozon-browser-fetcher
-            context: ./go_fetcher/internal
-            dockerfile: ./go_fetcher/internal/ozon_browser_fetcher/Dockerfile
-
-          - image: flashsale-wb-browser-fetcher
-            context: ./go_fetcher/internal
-            dockerfile: ./go_fetcher/internal/wb_browser_fetcher/Dockerfile
-
-          - image: flashsale-vpn-controller
-            context: ./go_fetcher/internal
-            dockerfile: ./go_fetcher/internal/vpn_controller/Dockerfile
-
-          - image: flashsale-grafana
-            context: ./grafana
-            dockerfile: ./grafana/Dockerfile
+        include: ${{ fromJSON(needs.changes.outputs.matrix) }}
 
     steps:
       - name: Checkout repository

@@ -1,6 +1,60 @@
-from django.contrib import admin
+from django.contrib import admin, messages
+from django.contrib.auth import get_user_model
+from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 
-from app.api.v1.notifications.models import NotificationChannel, NotificationDelivery
+from app.api.v1.notifications.models import (
+    NotificationChannel,
+    NotificationDelivery,
+)
+from app.api.v1.notifications.services.telegram_onboarding import (
+    TelegramOnboardingError,
+    TelegramOnboardingService,
+)
+
+
+User = get_user_model()
+
+
+@admin.action(description="Сгенерировать ссылку подключения Telegram")
+def generate_telegram_connect_link(modeladmin, request, queryset):
+    if queryset.count() != 1:
+        modeladmin.message_user(
+            request,
+            "Выберите ровно одного пользователя.",
+            level=messages.ERROR,
+        )
+        return
+
+    user = queryset.first()
+
+    try:
+        connect_link = TelegramOnboardingService.build_connect_link(user)
+    except TelegramOnboardingError as exc:
+        modeladmin.message_user(
+            request,
+            str(exc),
+            level=messages.ERROR,
+        )
+        return
+
+    modeladmin.message_user(
+        request,
+        f"Ссылка подключения Telegram: {connect_link.url}",
+        level=messages.SUCCESS,
+    )
+
+
+try:
+    admin.site.unregister(User)
+except admin.sites.NotRegistered:
+    pass
+
+
+@admin.register(User)
+class UserAdmin(DjangoUserAdmin):
+    actions = (
+        generate_telegram_connect_link,
+    )
 
 
 @admin.register(NotificationChannel)
