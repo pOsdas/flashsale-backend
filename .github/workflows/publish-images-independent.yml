@@ -35,13 +35,13 @@ jobs:
             context: ./go_fetcher/internal
             dockerfile: ./go_fetcher/internal/wb_browser_fetcher/Dockerfile
 
+          - image: flashsale-vpn-controller
+            context: ./go_fetcher/internal
+            dockerfile: ./go_fetcher/internal/vpn_controller/Dockerfile
+
           - image: flashsale-grafana
             context: ./grafana
             dockerfile: ./grafana/Dockerfile
-
-          - image: flashsale-vpn-config-builder
-            context: ./go_fetcher/vpn
-            dockerfile: ./go_fetcher/vpn/Dockerfile
 
     steps:
       - name: Checkout repository
