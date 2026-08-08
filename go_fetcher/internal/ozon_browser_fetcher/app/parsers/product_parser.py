@@ -83,6 +83,31 @@ def normalize_url(url: str) -> str:
     return url
 
 
+def is_ozon_short_url(url: str) -> bool:
+    try:
+        parsed_url = urlparse(url.strip())
+    except Exception:
+        return False
+
+    hostname = (parsed_url.hostname or "").lower()
+
+    if hostname not in {"ozon.ru", "www.ozon.ru"}:
+        return False
+
+    path = parsed_url.path.rstrip("/")
+
+    return path.startswith("/t/") and len(path) > len("/t/")
+
+
+def is_ozon_url(url: str) -> bool:
+    try:
+        hostname = (urlparse(url.strip()).hostname or "").lower()
+    except Exception:
+        return False
+
+    return hostname == "ozon.ru" or hostname.endswith(".ozon.ru")
+
+
 def is_meaningful_title(title: str) -> bool:
     title = title.strip()
 
@@ -711,7 +736,7 @@ def parse_product_from_page(page: Page, url: str) -> Product:
     normalized_url = normalize_url(url)
     product_id = extract_product_id(normalized_url)
 
-    if not product_id:
+    if not product_id and not is_ozon_short_url(normalized_url):
         raise RuntimeError(f"failed to extract Ozon product id from url: {url}")
 
     wait_page_loaded(page, normalized_url)
@@ -732,6 +757,24 @@ def parse_product_from_page(page: Page, url: str) -> Product:
             f"title={page_title!r}, current_url={page.url!r}"
         )
 
+    resolved_url = normalize_url(page.url)
+
+    if not is_ozon_url(resolved_url):
+        raise RuntimeError(
+            "Ozon product URL resolved outside ozon.ru: "
+            f"requested_url={url!r}, current_url={page.url!r}"
+        )
+
+    resolved_product_id = extract_product_id(resolved_url)
+    if resolved_product_id:
+        product_id = resolved_product_id
+
+    if not product_id:
+        raise RuntimeError(
+            "failed to extract Ozon product id after navigation: "
+            f"requested_url={url!r}, current_url={page.url!r}"
+        )
+
     json_ld_product = extract_product_from_json_ld(
         page=page,
         product_id=product_id,
@@ -744,8 +787,8 @@ def parse_product_from_page(page: Page, url: str) -> Product:
             page=page,
         )
 
-        product.url = normalized_url
-        product.product_path = extract_product_path_from_url(normalized_url)
+        product.url = resolved_url
+        product.product_path = extract_product_path_from_url(resolved_url)
 
         return product
 
@@ -761,8 +804,8 @@ def parse_product_from_page(page: Page, url: str) -> Product:
         page=page,
     )
 
-    product.url = normalized_url
-    product.product_path = extract_product_path_from_url(normalized_url)
+    product.url = resolved_url
+    product.product_path = extract_product_path_from_url(resolved_url)
 
     return product
 
