@@ -71,6 +71,7 @@ class ProductPreviewService:
                 url=url,
                 fallback_interval_minutes=60,
                 log_identity="product_preview",
+                interactive=True,
             )
 
         except ProductCacheBusyError as exc:

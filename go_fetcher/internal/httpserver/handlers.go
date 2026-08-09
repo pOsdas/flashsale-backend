@@ -91,6 +91,19 @@ func (s *Server) handleFetchProduct(w http.ResponseWriter, r *http.Request) {
 		err     error
 	)
 
+	fetchContext := r.Context()
+
+	if strings.EqualFold(
+		strings.TrimSpace(
+			r.Header.Get(browsergateway.RequestModeHeader),
+		),
+		browsergateway.RequestModeInteractive,
+	) {
+		fetchContext = browsergateway.WithInteractiveRequest(
+			fetchContext,
+		)
+	}
+
 	switch req.Marketplace {
 	case "wb":
 		if s.wbFetcher == nil {
@@ -100,7 +113,7 @@ func (s *Server) handleFetchProduct(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		product, err = s.wbFetcher(r.Context(), req)
+		product, err = s.wbFetcher(fetchContext, req)
 
 	case "ozon":
 		if s.ozonFetcher == nil {
@@ -110,7 +123,7 @@ func (s *Server) handleFetchProduct(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		product, err = s.ozonFetcher(r.Context(), req)
+		product, err = s.ozonFetcher(fetchContext, req)
 
 	default:
 		result = "validation_error"

@@ -247,6 +247,7 @@ class MonitoringScanner:
         force_refresh: bool = False,
         postpone_on_busy: bool = True,
         trigger: str = "scanner",
+        interactive: bool = False,
     ) -> MonitoringTargetProcessResult:
         """
         Process one monitoring target.
@@ -289,6 +290,7 @@ class MonitoringScanner:
                 .get_or_refresh_product(
                     target=target,
                     force_refresh=force_refresh,
+                    interactive=interactive,
                 )
             )
             fetched_data = cache_result.product

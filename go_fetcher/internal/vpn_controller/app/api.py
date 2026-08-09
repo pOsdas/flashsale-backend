@@ -196,11 +196,24 @@ def _execute_gateway(marketplace: str, worker_path: str):
     payload = request.get_json(silent=True) or {}
 
     try:
+        request_mode = (
+            request.headers.get(
+                "X-Flashsale-Request-Mode",
+                "",
+            )
+            .strip()
+            .lower()
+        )
+
+        bypass_parse_delay = request_mode == "interactive"
+
         result = orchestrator.execute(
             marketplace=marketplace,
             worker_path=worker_path,
             payload=payload,
+            bypass_parse_delay=bypass_parse_delay,
         )
+
     except GatewayUnavailableError as exc:
         response = jsonify(
             {

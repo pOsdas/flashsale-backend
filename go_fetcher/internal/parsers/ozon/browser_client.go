@@ -167,6 +167,13 @@ func (c *BrowserClient) doPost(ctx context.Context, path string, requestPayload 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
+	if browsergateway.IsInteractiveRequest(ctx) {
+		req.Header.Set(
+			browsergateway.RequestModeHeader,
+			browsergateway.RequestModeInteractive,
+		)
+	}
+
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("execute browser fetcher request: %w", err)

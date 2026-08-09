@@ -549,6 +549,7 @@ def check_monitoring_target_now(
         force_refresh=True,
         postpone_on_busy=False,
         trigger="manual_check",
+        interactive=True,
     )
 
     if process_result.temporarily_unavailable:

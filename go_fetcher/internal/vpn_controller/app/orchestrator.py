@@ -124,6 +124,7 @@ class VPNParseOrchestrator:
         marketplace: str,
         worker_path: str,
         payload: dict[str, Any],
+        bypass_parse_delay: bool = False,
     ) -> GatewayResponse:
         started_at = time.monotonic()
         result_label = "error"
@@ -147,7 +148,9 @@ class VPNParseOrchestrator:
 
             try:
                 self.session.stop_if_idle()
-                plan = self._require_plan()
+                plan = self._require_plan(
+                    bypass_parse_delay=bypass_parse_delay,
+                )
                 self._ensure_cycle(plan)
                 profiles = self._load_profile_map()
                 response = self._execute_plan(
@@ -214,8 +217,13 @@ class VPNParseOrchestrator:
         with self._parse_lock:
             self.session.stop(reason="controller_shutdown")
 
-    def _require_plan(self) -> PreflightPlan:
+    def _require_plan(
+            self,
+            *,
+            bypass_parse_delay: bool = False,
+    ) -> PreflightPlan:
         state_snapshot = self.state.snapshot()
+
         if state_snapshot["preflight_running"]:
             raise GatewayUnavailableError(
                 "VPN preflight is currently running",
@@ -223,33 +231,45 @@ class VPNParseOrchestrator:
             )
 
         plan = self.state.latest_plan()
+
         if plan is None:
             raise GatewayUnavailableError(
                 "VPN preflight plan is not ready",
                 retry_after_seconds=60,
             )
+
         if not plan.groups:
             raise GatewayUnavailableError(
                 "VPN preflight found no available profiles",
                 retry_after_seconds=300,
             )
 
-        if self.settings.require_parse_ready:
+        if (
+                self.settings.require_parse_ready
+                and not bypass_parse_delay
+        ):
             parse_ready_at = datetime.fromisoformat(
                 plan.parse_ready_at.replace("Z", "+00:00")
             )
             now = datetime.now(timezone.utc)
+
             if now < parse_ready_at:
                 retry_after_seconds = max(
                     1,
-                    math.ceil((parse_ready_at - now).total_seconds()),
+                    math.ceil(
+                        (
+                                parse_ready_at - now
+                        ).total_seconds()
+                    ),
                 )
+
                 raise GatewayUnavailableError(
                     "VPN parse window is not ready yet; "
                     f"parse_ready_at={plan.parse_ready_at}",
                     status_code=425,
                     retry_after_seconds=retry_after_seconds,
                 )
+
         return plan
 
     def _ensure_cycle(self, plan: PreflightPlan) -> None:

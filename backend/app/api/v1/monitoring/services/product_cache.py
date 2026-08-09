@@ -96,6 +96,7 @@ class ProductCacheService:
             *,
             target: MonitoringTarget,
             force_refresh: bool = False,
+            interactive: bool = False,
     ) -> ProductCacheResult:
         return self.get_or_refresh_product_by_identity(
             marketplace=target.marketplace,
@@ -107,7 +108,7 @@ class ProductCacheService:
             fallback_interval_minutes=target.check_interval_minutes,
             force_refresh=force_refresh,
             log_identity=str(target.id),
-            fetch_product_callback=lambda: self.fetcher_client.fetch_target(target=target),
+            fetch_product_callback=lambda: self.fetcher_client.fetch_target(target=target, interactive=interactive),
         )
 
     def get_or_refresh_product_by_identity(
@@ -122,6 +123,7 @@ class ProductCacheService:
             fallback_interval_minutes: int | None = None,
             force_refresh: bool = False,
             log_identity: str = "",
+            interactive: bool = False,
             fetch_product_callback: Callable[[], FetchedProductData] | None = None,
     ) -> ProductCacheResult:
         normalized_external_id = external_id.strip()
@@ -192,6 +194,7 @@ class ProductCacheService:
                     fallback_interval_minutes=fallback_interval_minutes,
                     force_refresh=force_refresh,
                     log_identity=log_identity,
+                    interactive=interactive,
                     fetch_product_callback=fetch_product_callback,
                 )
 
@@ -460,6 +463,7 @@ class ProductCacheService:
             fallback_interval_minutes: int | None,
             force_refresh: bool,
             log_identity: str,
+            interactive: bool,
             fetch_product_callback: Callable[[], FetchedProductData] | None,
     ) -> ProductCacheResult:
         marketplace_label = normalize_marketplace_label(marketplace)
@@ -511,6 +515,7 @@ class ProductCacheService:
                     seller_name=seller_name,
                     brand=brand,
                     log_identity=log_identity,
+                    interactive=interactive,
                 )
 
             parsed_at = timezone.now()

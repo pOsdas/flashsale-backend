@@ -63,7 +63,7 @@ class MonitoringFetcherTemporarilyUnavailableError(MonitoringFetcherError):
 
 
 class MonitoringFetcherClient:
-    def fetch_target(self, *, target: MonitoringTarget) -> FetchedProductData:
+    def fetch_target(self, *, target: MonitoringTarget, interactive: bool = False) -> FetchedProductData:
         return self.fetch_product(
             marketplace=target.marketplace,
             url=target.url,
@@ -72,6 +72,7 @@ class MonitoringFetcherClient:
             seller_name=target.seller_name,
             brand=target.brand,
             log_identity=str(target.id),
+            interactive=interactive,
         )
 
     def fetch_product(
@@ -84,6 +85,7 @@ class MonitoringFetcherClient:
         seller_name: str = "",
         brand: str = "",
         log_identity: str = "",
+        interactive: bool = False,
     ) -> FetchedProductData:
         raise NotImplementedError
 
@@ -112,6 +114,7 @@ class HttpMonitoringFetcherClient(MonitoringFetcherClient):
         seller_name: str = "",
         brand: str = "",
         log_identity: str = "",
+        interactive: bool = False,
     ) -> FetchedProductData:
         endpoint = urljoin(self.base_url, self.product_endpoint)
         marketplace_label = normalize_marketplace_label(marketplace)
@@ -131,6 +134,9 @@ class HttpMonitoringFetcherClient(MonitoringFetcherClient):
 
         if self.api_key:
             headers["X-Fetcher-Api-Key"] = self.api_key
+
+        if interactive:
+            headers["X-Flashsale-Request-Mode"] = "interactive"
 
         logger.warning(
             "GO_FETCHER_REQUEST_URL",
@@ -379,7 +385,7 @@ class FakeMonitoringFetcherClient(MonitoringFetcherClient):
     Use MONITORING_FETCHER_MODE=fake to enable it.
     """
 
-    def fetch_target(self, *, target: MonitoringTarget) -> FetchedProductData:
+    def fetch_target(self, *, target: MonitoringTarget, interactive: bool = False,) -> FetchedProductData:
         snapshots_count = target.snapshots.count()
 
         base_price = Decimal("1000.00")
@@ -441,6 +447,7 @@ class FakeMonitoringFetcherClient(MonitoringFetcherClient):
         seller_name: str = "",
         brand: str = "",
         log_identity: str = "",
+        interactive: bool = False,
     ) -> FetchedProductData:
         resolved_external_id = (
             external_id
